@@ -29,6 +29,9 @@ const schema = z.object({
   // Приходят от техподдержки amoCRM после регистрации канала.
   AMO_CHAT_CHANNEL_ID: z.string().default(''),
   AMO_CHAT_SECRET_KEY: z.string().default(''),
+  AMO_CHAT_CODE: z.string().default(''),
+  AMO_CHAT_SCOPE_ID: z.string().default(''),
+  AMO_CHAT_BASE_URL: z.string().default('https://amojo.amocrm.ru'),
 
   TG_BOT_TOKEN: z.string().default(''),
   TG_ALERT_CHAT_ID: z.string().default(''),
