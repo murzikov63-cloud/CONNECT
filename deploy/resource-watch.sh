@@ -66,12 +66,17 @@ else
 fi
 
 # --- контейнеры, которых не должно не быть ---
-if command -v docker >/dev/null 2>&1; then
-  for name in messenger-connect-postgres-1 messenger-connect-redis-1 messenger-connect-app-1 messenger-connect-caddy-1; do
-    if ! docker ps --format '{{.Names}}' | grep -qx "$name"; then
-      notify "down-$name" "🔴 Messenger: контейнер $name не запущен."
+# Список берём из самого docker-compose, а не хардкодом: иначе после
+# добавления или переименования сервиса сторож молча перестанет его видеть.
+PROJECT_DIR="${PROJECT_DIR:-/opt/messenger-connect}"
+if command -v docker >/dev/null 2>&1 && [ -f "$PROJECT_DIR/docker-compose.yml" ]; then
+  running=$(cd "$PROJECT_DIR" && docker compose ps --services --status running 2>/dev/null || true)
+  expected=$(cd "$PROJECT_DIR" && docker compose config --services 2>/dev/null || true)
+  for svc in $expected; do
+    if ! echo "$running" | grep -qx "$svc"; then
+      notify "down-$svc" "🔴 Messenger: контейнер $svc не работает."
     else
-      clear_stamp "down-$name"
+      clear_stamp "down-$svc"
     fi
   done
 fi
