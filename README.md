@@ -18,7 +18,7 @@
 | 0. Исследование amoCRM и Baileys | ✅ `docs/amocrm-notes.md`, `docs/wa-notes.md` |
 | 0.3 Каркас репозитория | ✅ |
 | 1. Доступы (Анатолий) | 🟡 интеграция ✅, ждём ответ amoCRM по чатам |
-| 2. Ядро WhatsApp | — |
+| 2. Ядро WhatsApp | ✅ типы, линт, тесты и живые проверки зелёные |
 | 3. Коннектор amoCRM | — |
 | 4. Admin API + фронт | — |
 | 5. Деплой | — |
@@ -30,9 +30,22 @@
     docker compose up -d postgres redis
     npm ci && npm run dev
 
-## Проверки перед коммитом
+## Проверки
 
-    npm run check             # типы + линт + тесты
+    npm run check                      # типы + линт + тесты (36 тестов)
+    npx tsx scripts/check-baileys.ts   # связка с библиотекой WhatsApp
+    npx tsx scripts/check-db.ts        # миграции и гарантии схемы на живой базе
+
+`check-baileys` запускать обязательно после каждого обновления Baileys —
+он ловит пропавшие экспорты и несовместимость хранения ключей сессии.
+
+`check-db` требует пустую тестовую базу, например:
+
+    docker run -d --rm --name pg-test -e POSTGRES_USER=test \
+      -e POSTGRES_PASSWORD=test -e POSTGRES_DB=test -p 55433:5432 postgres:16-alpine
+    PGHOST=127.0.0.1 PGPORT=55433 PGUSER=test PGPASSWORD=test PGDATABASE=test \
+      PUBLIC_DOMAIN=x REDIS_URL=redis://127.0.0.1:6379 ADMIN_API_KEY=test-key \
+      npx tsx scripts/check-db.ts
 
 ## Обновление Baileys
 

@@ -4,13 +4,15 @@
   "private": true,
   "description": "Мост WhatsApp <-> amoCRM (замена Radist.Online)",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "lint": "eslint src test --ext .ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test scripts --ext .ts",
+    "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run test"
   },

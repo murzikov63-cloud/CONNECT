@@ -5,7 +5,7 @@
     "moduleResolution": "bundler",
     "lib": ["ES2023"],
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "src",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -15,5 +15,5 @@
     "sourceMap": true,
     "declaration": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }

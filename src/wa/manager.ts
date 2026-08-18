@@ -28,12 +28,14 @@ export interface ChatRow {
   chat_jid: string
   phone: string | null
   push_name: string | null
+  avatar_url: string | null
   is_group: boolean
   ignored: boolean
   amo_chat_id: string | null
   amo_contact_id: string | null
   amo_lead_id: string | null
   first_outbound_at: Date | null
+  last_message_at: Date | null
 }
 
 /**
