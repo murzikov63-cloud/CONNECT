@@ -7,8 +7,10 @@ const settings = (personal: string[]): Settings => ({
   personalNumbers: personal,
   ignoreGroups: true,
   newChatsPerNumberPerDay: 30,
-  sendDelayMinMs: 2000,
-  sendDelayMaxMs: 8000,
+  newChatDelayMinMs: 2000,
+  newChatDelayMaxMs: 8000,
+  replyDelayMinMs: 300,
+  replyDelayMaxMs: 1500,
   amoPipelineId: null,
   amoStatusId: null,
 })
@@ -36,6 +38,21 @@ describe('isPersonalNumber', () => {
 
   it('пустой телефон (группа) личным не считается', () => {
     expect(isPersonalNumber(settings(['79991234567']), '')).toBe(false)
+  })
+})
+
+describe('бюджет задержек', () => {
+  it('ответ в живом диалоге укладывается в 5 секунд', () => {
+    // Раздел 8 ТЗ: ответ менеджера доходит клиенту не позже 5 секунд.
+    const s = settings([])
+    for (let i = 0; i < 200; i++) {
+      expect(randomDelay(s.replyDelayMinMs, s.replyDelayMaxMs)).toBeLessThan(5000)
+    }
+  })
+
+  it('первому сообщению незнакомцу пауза длиннее', () => {
+    const s = settings([])
+    expect(s.newChatDelayMinMs).toBeGreaterThan(s.replyDelayMaxMs)
   })
 })
 

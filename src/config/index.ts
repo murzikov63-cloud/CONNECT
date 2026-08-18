@@ -45,8 +45,14 @@ const schema = z.object({
   PORT: z.coerce.number().int().default(3000),
 
   // Поведение отправки — раздел 5 ТЗ («human-like» лимиты).
-  SEND_DELAY_MIN_MS: z.coerce.number().int().default(2000),
-  SEND_DELAY_MAX_MS: z.coerce.number().int().default(8000),
+  // Пауза перед ПЕРВЫМ сообщением незнакомому контакту: именно оно похоже
+  // на рассылку, поэтому здесь длинная случайная задержка.
+  NEW_CHAT_DELAY_MIN_MS: z.coerce.number().int().default(2000),
+  NEW_CHAT_DELAY_MAX_MS: z.coerce.number().int().default(8000),
+  // Ответ в уже идущем диалоге: задержка короткая, иначе не уложимся
+  // в «ответ менеджера доходит за 5 секунд» из раздела 8 ТЗ.
+  REPLY_DELAY_MIN_MS: z.coerce.number().int().default(300),
+  REPLY_DELAY_MAX_MS: z.coerce.number().int().default(1500),
   NEW_CHATS_PER_NUMBER_PER_DAY: z.coerce.number().int().default(30),
   IGNORE_GROUPS: bool.default('true'),
 })

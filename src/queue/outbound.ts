@@ -68,7 +68,12 @@ export function createOutboundWorker(manager: SessionManager): Worker<OutboundJo
         }
       }
 
-      await sleep(randomDelay(settings.sendDelayMinMs, settings.sendDelayMaxMs))
+      // Длинная пауза оправдана только для первого сообщения незнакомцу.
+      // В живой переписке она бы съела весь бюджет в 5 секунд.
+      const [minMs, maxMs] = isNewChat
+        ? [settings.newChatDelayMinMs, settings.newChatDelayMaxMs]
+        : [settings.replyDelayMinMs, settings.replyDelayMaxMs]
+      await sleep(randomDelay(minMs, maxMs))
 
       const waMessageId = await session.send(out)
 

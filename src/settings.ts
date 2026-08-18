@@ -7,8 +7,12 @@ export interface Settings {
   personalNumbers: string[]
   ignoreGroups: boolean
   newChatsPerNumberPerDay: number
-  sendDelayMinMs: number
-  sendDelayMaxMs: number
+  /** Пауза перед первым сообщением новому контакту. */
+  newChatDelayMinMs: number
+  newChatDelayMaxMs: number
+  /** Пауза перед ответом в уже идущем диалоге. */
+  replyDelayMinMs: number
+  replyDelayMaxMs: number
   /** Воронка и этап для новых лидов; null — «Неразобранное». */
   amoPipelineId: number | null
   amoStatusId: number | null
@@ -18,8 +22,10 @@ const DEFAULTS = (): Settings => ({
   personalNumbers: [],
   ignoreGroups: config.IGNORE_GROUPS,
   newChatsPerNumberPerDay: config.NEW_CHATS_PER_NUMBER_PER_DAY,
-  sendDelayMinMs: config.SEND_DELAY_MIN_MS,
-  sendDelayMaxMs: config.SEND_DELAY_MAX_MS,
+  newChatDelayMinMs: config.NEW_CHAT_DELAY_MIN_MS,
+  newChatDelayMaxMs: config.NEW_CHAT_DELAY_MAX_MS,
+  replyDelayMinMs: config.REPLY_DELAY_MIN_MS,
+  replyDelayMaxMs: config.REPLY_DELAY_MAX_MS,
   amoPipelineId: null,
   amoStatusId: null,
 })
