@@ -1,0 +1,32 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Вебхуки amoCRM (amojo) — только POST, публично, защита по подписи в самом приложении
+	handle /amojo/* {
+		reverse_proxy app:3000
+	}
+
+	# OAuth callback amoCRM
+	handle /amocrm/* {
+		reverse_proxy app:3000
+	}
+
+	# Медиа по подписанным ссылкам — их скачивает amoCRM
+	handle /media/* {
+		reverse_proxy app:3000
+	}
+
+	# Admin API — закрыт API-ключом в приложении
+	handle /api/* {
+		reverse_proxy app:3000
+	}
+
+	handle {
+		respond "messenger-connect" 200
+	}
+
+	log {
+		output file /data/access.log
+		format json
+	}
+}

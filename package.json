@@ -1,0 +1,41 @@
+{
+  "name": "messenger-connect",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Мост WhatsApp <-> amoCRM (замена Radist.Online)",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src test --ext .ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
+    "bullmq": "^5.34.0",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.0",
+    "@fastify/cors": "^10.0.1",
+    "@fastify/multipart": "^9.0.1",
+    "grammy": "^1.32.0",
+    "ioredis": "^5.4.2",
+    "pino": "^9.5.0",
+    "postgres": "^3.4.5",
+    "qrcode": "^1.5.4",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/qrcode": "^1.5.5",
+    "@typescript-eslint/eslint-plugin": "^8.19.0",
+    "@typescript-eslint/parser": "^8.19.0",
+    "eslint": "^8.57.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
