@@ -35,6 +35,11 @@
 		reverse_proxy app:3000
 	}
 
+	# Открытая проверка живости — ею пользуется внешний мониторинг
+	handle /health {
+		reverse_proxy app:3000
+	}
+
 	handle {
 		respond "messenger-connect" 200
 	}

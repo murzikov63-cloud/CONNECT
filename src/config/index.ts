@@ -37,6 +37,8 @@ const schema = z.object({
   TG_ALERT_CHAT_ID: z.string().default(''),
 
   ADMIN_API_KEY: z.string().min(8),
+  // Пароль для входа в админку. Пустой — вход по паролю выключен.
+  ADMIN_PASSWORD: z.string().default(''),
   ADMIN_CORS_ORIGIN: z.string().default(''),
 
   MEDIA_DIR: z.string().default('/app/media'),
