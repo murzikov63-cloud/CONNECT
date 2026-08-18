@@ -1,0 +1,7 @@
+[Unit]
+Description=Messenger: проверка памяти, диска и контейнеров
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/messenger-connect/deploy/resource-watch.sh

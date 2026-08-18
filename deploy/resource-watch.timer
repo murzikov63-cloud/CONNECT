@@ -1,0 +1,10 @@
+[Unit]
+Description=Messenger: запуск проверки ресурсов каждые 5 минут
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

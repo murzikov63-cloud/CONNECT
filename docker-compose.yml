@@ -2,6 +2,19 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Настройки под сервер с 2 ГБ: по умолчанию Postgres рассчитывает
+    # на куда больший объём и в тесноте начинает свопиться.
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c effective_cache_size=384MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=40
+      -c wal_compression=on
+    mem_limit: 512m
+    # База умирает последней: без неё сервис всё равно бесполезен.
+    oom_score_adj: -500
     environment:
       POSTGRES_USER: ${PGUSER}
       POSTGRES_PASSWORD: ${PGPASSWORD}
@@ -17,7 +30,15 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # noeviction принципиально: очередь не должна молча терять задания.
+    # Если упрётся в потолок — придёт алерт, а не тихая пропажа сообщений.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 96mb
+      --maxmemory-policy noeviction
+    mem_limit: 128m
+    oom_score_adj: -300
     volumes:
       - redisdata:/data
     healthcheck:
@@ -29,6 +50,14 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # Потолок кучи Node ниже лимита контейнера: сборщик мусора успеет
+    # среагировать раньше, чем система решит убить процесс.
+    environment:
+      NODE_OPTIONS: --max-old-space-size=640
+    mem_limit: 768m
+    # Если памяти всё-таки не хватит, первым отстреливается сервис:
+    # он поднимется сам и переподключится, а база и очередь уцелеют.
+    oom_score_adj: 200
     env_file: .env
     depends_on:
       postgres: { condition: service_healthy }
@@ -47,6 +76,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    mem_limit: 96m
     ports:
       - "80:80"
       - "443:443"
