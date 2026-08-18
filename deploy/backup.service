@@ -1,0 +1,7 @@
+[Unit]
+Description=Messenger: ежедневный бэкап базы
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/messenger-connect/deploy/backup.sh
