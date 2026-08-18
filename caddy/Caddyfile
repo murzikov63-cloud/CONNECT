@@ -1,7 +1,21 @@
+# Адрес проксируется через Cloudflare (оранжевое облако), поэтому сертификат
+# от Let's Encrypt здесь получить нельзя — проверка не дойдёт до нас.
+# Вместо него ставим Origin Certificate, выпущенный самим Cloudflare:
+# он бесплатный, живёт 15 лет и годится только для связки Cloudflare -> сервер.
+# В панели Cloudflare режим шифрования должен быть Full (strict).
+#
+# Если когда-нибудь уберём проксирование (серое облако) — удалить строку `tls`
+# целиком, Caddy сам получит обычный сертификат.
+
 {$DOMAIN} {
+	tls /etc/caddy/origin/cert.pem /etc/caddy/origin/key.pem
+
 	encode zstd gzip
 
-	# Вебхуки amoCRM (amojo) — только POST, публично, защита по подписи в самом приложении
+	# Настоящий IP клиента Cloudflare кладёт в этот заголовок.
+	request_header X-Real-IP {header.CF-Connecting-IP}
+
+	# Вебхуки amoCRM (amojo) — подпись проверяется в самом приложении
 	handle /amojo/* {
 		reverse_proxy app:3000
 	}
@@ -16,7 +30,7 @@
 		reverse_proxy app:3000
 	}
 
-	# Admin API — закрыт API-ключом в приложении
+	# Admin API — закрыт ключом в приложении
 	handle /api/* {
 		reverse_proxy app:3000
 	}
