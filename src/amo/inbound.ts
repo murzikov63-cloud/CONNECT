@@ -73,18 +73,17 @@ function clientName(row: Row): string {
 }
 
 /**
- * Имя в самой беседе: с пометкой мессенджера.
+ * Собеседник для amoCRM.
  *
- * Канал в amoCRM у нас один на все мессенджеры, поэтому в списке источников
- * карточки все наши беседы называются одинаково. Если клиент пишет и в
- * Телеграм, и в WhatsApp, менеджер не отличит их и ответит не туда —
- * так уже случалось. Пометка в имени эту путаницу снимает.
+ * Пометку мессенджера в имя добавлять бесполезно: если чат привязан
+ * к контакту, amoCRM показывает имя из карточки, а наше игнорирует.
+ * Проверено на живом аккаунте. Различать беседы разных мессенджеров
+ * можно только отдельными каналами amoCRM.
  */
 function buildSender(row: Row): AmoUser {
-  const title = row.channel_kind === 'telegram' ? 'Телеграм' : row.channel_kind === 'max' ? 'MAX' : 'WhatsApp'
   const user: AmoUser = {
     id: `${row.channel_kind}-${row.external_chat_id}`,
-    name: `${clientName(row)} · ${title}`,
+    name: clientName(row),
   }
   const avatar = toPublicUrl(row.avatar_url)
   if (avatar !== undefined) user.avatar = avatar
