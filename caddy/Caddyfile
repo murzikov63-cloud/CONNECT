@@ -40,8 +40,13 @@
 		reverse_proxy app:3000
 	}
 
+	# Админка отдаётся с нашего же адреса. Благодаря этому фронт и API
+	# на одном домене: межсайтовых разрешений (CORS) не нужно вовсе,
+	# и постороннему сайту дёрнуть наш API нечем.
 	handle {
-		respond "messenger-connect" 200
+		root * /srv/admin
+		try_files {path} /index.html
+		file_server
 	}
 
 	log {
