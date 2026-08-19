@@ -94,6 +94,13 @@ export interface OutgoingFromAmo {
   /** Идентификатор чата на стороне amoCRM. */
   amoChatId: string
   amoMessageId: string
+  /**
+   * Телефон получателя. Единственная зацепка, когда менеджер начал разговор
+   * сам: amoCRM заводит беседу с новым идентификатором, которого мы ещё
+   * не видели, и связать её с нашей перепиской больше не по чему.
+   */
+  receiverPhone: string
+  receiverName: string
   type: MessageType
   text: string
   media?: string
@@ -120,10 +127,13 @@ export function parseOutgoing(body: any): OutgoingFromAmo | null {
 
   if (conversationClientId === '' && amoChatId === '') return null
 
+  const receiver = m?.receiver ?? {}
   const result: OutgoingFromAmo = {
     conversationClientId,
     amoChatId,
     amoMessageId,
+    receiverPhone: String(receiver.phone ?? '').replace(/\D/g, ''),
+    receiverName: String(receiver.name ?? ''),
     type: fromAmoType(inner?.type),
     text: inner?.text ?? '',
   }
@@ -139,8 +149,14 @@ export interface ResolvedChat {
   external_chat_id: string
 }
 
-/** Находит нашу переписку по тому, что прислал amoCRM. */
-export async function resolveChat(parsed: OutgoingFromAmo): Promise<ResolvedChat | null> {
+/**
+ * Находит нашу переписку по тому, что прислал amoCRM.
+ * Порядок важен: сначала точные совпадения, телефон — последняя попытка.
+ */
+export async function resolveChat(
+  parsed: OutgoingFromAmo,
+  kind: string,
+): Promise<ResolvedChat | null> {
   // Сначала по идентификатору чата amoCRM — он записан у нас при создании.
   if (parsed.amoChatId !== '') {
     const rows = await sql<ResolvedChat[]>`
@@ -160,8 +176,43 @@ export async function resolveChat(parsed: OutgoingFromAmo): Promise<ResolvedChat
     if (rows[0] !== undefined) return rows[0]
   }
 
+  // Менеджер начал разговор сам: беседа новая, но телефон получателя
+  // amoCRM присылает. Ищем переписку с этим телефоном в том мессенджере,
+  // канал которого выбрал менеджер.
+  if (parsed.receiverPhone !== '') {
+    const rows = await sql<ResolvedChat[]>`
+      select c.id::text as chat_id, c.channel_id::text as channel_id, c.external_chat_id
+      from chats c
+      join channels ch on ch.id = c.channel_id
+      where ch.kind = ${kind} and ch.deleted_at is null
+        and regexp_replace(coalesce(c.phone, ''), '\D', '', 'g') = ${parsed.receiverPhone}
+      order by c.last_message_at desc nulls last
+      limit 1
+    `
+    const found = rows[0]
+    if (found !== undefined) {
+      // Запоминаем беседу amoCRM, чтобы следующие сообщения находились сразу.
+      if (parsed.amoChatId !== '') {
+        await sql`
+          update chats set amo_chat_id = ${parsed.amoChatId}, updated_at = now()
+          where id = ${found.chat_id}
+        `
+      }
+      logger.info(
+        { phone: parsed.receiverPhone, kind },
+        'переписка найдена по телефону получателя',
+      )
+      return found
+    }
+  }
+
   logger.warn(
-    { amoChatId: parsed.amoChatId, conversationClientId: parsed.conversationClientId },
+    {
+      amoChatId: parsed.amoChatId,
+      conversationClientId: parsed.conversationClientId,
+      телефонПолучателя: parsed.receiverPhone === '' ? 'нет' : 'есть',
+      мессенджер: kind,
+    },
     'не нашёл переписку, к которой относится ответ менеджера',
   )
   return null

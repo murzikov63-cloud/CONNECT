@@ -108,6 +108,45 @@ describe('разбор вебхука с ответом менеджера', () 
     expect(parsed?.media).toBeUndefined()
   })
 
+  it('телефон получателя вытаскивается — по нему находим переписку', () => {
+    // Когда менеджер начинает разговор сам, amoCRM заводит беседу с новым
+    // идентификатором. Телефон получателя — единственная зацепка.
+    const parsed = parseOutgoing({
+      account_id: 'acc',
+      message: {
+        receiver: { id: 'u1', name: 'Антон', phone: '79660388883' },
+        sender: { id: 's1', name: 'Анатолий' },
+        conversation: { id: '126683c4' },
+        message: { id: 'm1', type: 'text', text: 'ку' },
+      },
+    })
+    expect(parsed).toMatchObject({
+      receiverPhone: '79660388883',
+      receiverName: 'Антон',
+      amoChatId: '126683c4',
+      conversationClientId: '',
+      text: 'ку',
+    })
+  })
+
+  it('телефон очищается от форматирования', () => {
+    const parsed = parseOutgoing({
+      message: {
+        receiver: { phone: '+7 (966) 038-88-83' },
+        conversation: { id: 'c1' },
+        message: { id: 'm1', type: 'text' },
+      },
+    })
+    expect(parsed?.receiverPhone).toBe('79660388883')
+  })
+
+  it('без телефона получателя разбор не падает', () => {
+    const parsed = parseOutgoing({
+      message: { conversation: { id: 'c1' }, message: { id: 'm1', type: 'text' } },
+    })
+    expect(parsed?.receiverPhone).toBe('')
+  })
+
   it('мусор не роняет разбор', () => {
     expect(parseOutgoing({})).toBeNull()
     expect(parseOutgoing({ message: {} })).toBeNull()

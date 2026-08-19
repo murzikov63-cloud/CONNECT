@@ -377,7 +377,7 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       return reply.code(200).send({ ok: true })
     }
 
-    const chat = await resolveChat(parsed)
+    const chat = await resolveChat(parsed, amoChannel.kind)
     if (chat === null) return reply.code(200).send({ ok: true })
 
     const inserted = await sql<{ id: string }[]>`
