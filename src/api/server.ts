@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { COOLDOWN_DAILY_MS, alert } from '../alerts/index.js'
 import { channelForScope } from '../amo/channels.js'
+import type { MaxDriver, MaxIncoming } from '../max/driver.js'
 import { chatApiReady, config } from '../config/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
@@ -103,7 +104,7 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     Object.entries(CAPABILITIES).map(([kind, caps]) => ({
       kind,
       title: CHANNEL_TITLES[kind as keyof typeof CHANNEL_TITLES],
-      available: kind === 'whatsapp' || kind === 'telegram',
+      available: true,
       ...caps,
     })),
   )
@@ -323,6 +324,29 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       })
     }
     return saveSettings(parsed.data)
+  })
+
+  // --- входящие из MAX --------------------------------------------------
+
+  /**
+   * Сюда служба-переводчик MAX приносит входящие сообщения.
+   * Наружу этот адрес не выведен: Caddy его не проксирует, служба
+   * обращается к нам напрямую внутри докер-сети.
+   */
+  app.post<{ Body: MaxIncoming }>('/internal/max/incoming', async (req, reply) => {
+    if (config.BRIDGE_SECRET === '' || req.headers['x-bridge-secret'] !== config.BRIDGE_SECRET) {
+      return reply.code(401).send({ error: 'неверный ключ службы' })
+    }
+
+    const driver = manager.getDriver(req.body.channelId)
+    if (driver === undefined || driver.kind !== 'max') {
+      logger.warn({ channelId: req.body.channelId }, 'входящее MAX для неизвестного канала')
+      return reply.code(404).send({ error: 'канал не найден' })
+    }
+
+    const maxDriver = driver as unknown as MaxDriver
+    maxDriver.ingest(req.body)
+    return { ok: true }
   })
 
   // --- ответы менеджеров из amoCRM --------------------------------------

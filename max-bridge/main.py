@@ -1,0 +1,349 @@
+"""
+Служба-переводчик между нашим сервисом и мессенджером MAX.
+
+Зачем отдельным процессом: рабочая библиотека для личного аккаунта MAX
+существует только на Python, а сервис написан на другом языке. Переписывать
+чужой недокументированный протокол с нуля вышло бы дольше и держалось бы
+хуже, поэтому библиотеку используем как есть, а разговариваем с ней
+по простому HTTP внутри докер-сети. Наружу эта служба не смотрит.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import mimetypes
+import os
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+from aiohttp import web
+from pymax import WebClient
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("max-bridge")
+
+APP_URL = os.environ.get("APP_URL", "http://app:3000")
+BRIDGE_SECRET = os.environ.get("BRIDGE_SECRET", "")
+MEDIA_DIR = Path(os.environ.get("MEDIA_DIR", "/app/media"))
+SESSION_DIR = Path(os.environ.get("SESSION_DIR", "/data"))
+PORT = int(os.environ.get("PORT", "8090"))
+
+
+@dataclass
+class Session:
+    channel_id: str
+    client: WebClient | None = None
+    task: asyncio.Task[Any] | None = None
+    status: str = "new"
+    qr_url: str | None = None
+    phone: str = ""
+    user_id: str = ""
+    error: str = ""
+    stopping: bool = False
+    started_at: float = field(default_factory=time.time)
+
+
+sessions: dict[str, Session] = {}
+
+
+class QrCatcher:
+    """Ловит ссылку QR вместо того, чтобы рисовать её в консоли."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    async def show_qr(self, qr_url: str) -> None:
+        self.session.qr_url = qr_url
+        self.session.status = "qr"
+        log.info("канал %s: получен QR", self.session.channel_id)
+
+
+def ext_for(mime: str, name: str | None) -> str:
+    if name and "." in name:
+        return name.rsplit(".", 1)[-1][:8]
+    guessed = mimetypes.guess_extension(mime or "") or ".bin"
+    return guessed.lstrip(".")
+
+
+async def download_to_media(session: Session, url: str, message_id: str, mime: str, name: str | None) -> dict[str, Any] | None:
+    """Скачивает вложение в общий том, чтобы сервис отдал его amoCRM ссылкой."""
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    safe_id = "".join(ch for ch in str(message_id) if ch.isalnum() or ch in "-_")
+    rel = f"{session.channel_id}/{month}/{safe_id}.{ext_for(mime, name)}"
+    dest = MEDIA_DIR / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(url, timeout=aiohttp.ClientTimeout(total=180)) as resp:
+                if resp.status != 200:
+                    log.warning("вложение не скачалось: HTTP %s", resp.status)
+                    return None
+                data = await resp.read()
+        dest.write_bytes(data)
+        return {"path": rel, "mime": mime, "name": name or dest.name, "size": len(data)}
+    except Exception as err:  # noqa: BLE001
+        log.warning("вложение не скачалось: %s", err)
+        return None
+
+
+async def resolve_attachment(session: Session, msg: Any, att: Any) -> tuple[str, dict[str, Any] | None, str]:
+    """Возвращает (наш тип, сведения о файле, подпись)."""
+    kind = str(getattr(att, "type", "") or "").lower()
+    client = session.client
+    mid = str(getattr(msg, "id", ""))
+
+    if "photo" in kind:
+        url = getattr(att, "base_url", None)
+        media = await download_to_media(session, url, mid, "image/jpeg", None) if url else None
+        return "image", media, ""
+
+    if "audio" in kind:
+        url = getattr(att, "url", None)
+        media = await download_to_media(session, url, mid, "audio/ogg", None) if url else None
+        # В MAX голосовые и аудиофайлы приходят одним типом.
+        return "voice", media, ""
+
+    if "sticker" in kind:
+        url = getattr(att, "url", None)
+        media = await download_to_media(session, url, mid, "image/webp", None) if url else None
+        return "sticker", media, ""
+
+    if "video" in kind and client is not None:
+        vid = getattr(att, "video_id", None)
+        req = await client.get_video_by_id(msg.chat_id, msg.id, vid) if vid else None
+        url = getattr(req, "url", None)
+        media = await download_to_media(session, url, mid, "video/mp4", None) if url else None
+        return "video", media, ""
+
+    if "file" in kind and client is not None:
+        fid = getattr(att, "file_id", None)
+        req = await client.get_file_by_id(msg.chat_id, msg.id, fid) if fid else None
+        url = getattr(req, "url", None)
+        name = getattr(att, "name", None)
+        mime = mimetypes.guess_type(name or "")[0] or "application/octet-stream"
+        media = await download_to_media(session, url, mid, mime, name) if url else None
+        return "document", media, ""
+
+    if "contact" in kind:
+        name = getattr(att, "name", None) or " ".join(
+            x for x in [getattr(att, "first_name", ""), getattr(att, "last_name", "")] if x
+        )
+        return "contact", None, name
+
+    if "share" in kind:
+        return "text", None, str(getattr(att, "url", "") or "")
+
+    return "unsupported", None, ""
+
+
+async def forward_to_app(payload: dict[str, Any]) -> None:
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(
+                f"{APP_URL}/internal/max/incoming",
+                json=payload,
+                headers={"X-Bridge-Secret": BRIDGE_SECRET},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status >= 300:
+                    log.warning("сервис не принял сообщение: HTTP %s", resp.status)
+    except Exception as err:  # noqa: BLE001
+        log.error("не смог передать сообщение сервису: %s", err)
+
+
+def make_client(session: Session) -> WebClient:
+    client = WebClient(
+        session_name=f"{session.channel_id}.db",
+        work_dir=str(SESSION_DIR),
+        qr_provider=QrCatcher(session),
+    )
+
+    @client.on_start()
+    async def _on_start(c: WebClient) -> None:  # type: ignore[misc]
+        session.status = "online"
+        session.qr_url = None
+        me = getattr(c, "me", None)
+        contact = getattr(me, "contact", None) if me else None
+        session.user_id = str(getattr(contact, "id", "") or "")
+        session.phone = str(getattr(contact, "phone", "") or "")
+        log.info("канал %s: MAX в сети (%s)", session.channel_id, session.phone or session.user_id)
+
+    @client.on_message()
+    async def _on_message(message: Any, c: WebClient) -> None:  # type: ignore[misc]
+        try:
+            await handle_message(session, message)
+        except Exception as err:  # noqa: BLE001
+            log.exception("ошибка обработки входящего: %s", err)
+
+    @client.on_disconnect()
+    async def _on_disconnect(c: WebClient) -> None:  # type: ignore[misc]
+        if not session.stopping:
+            session.status = "offline"
+            log.warning("канал %s: связь с MAX потеряна", session.channel_id)
+
+    return client
+
+
+async def handle_message(session: Session, message: Any) -> None:
+    chat_id = getattr(message, "chat_id", None)
+    if chat_id is None:
+        return
+
+    msg_type = "text"
+    media: dict[str, Any] | None = None
+    text = getattr(message, "text", "") or ""
+
+    attaches = list(getattr(message, "attaches", None) or [])
+    if attaches:
+        msg_type, media, extra = await resolve_attachment(session, message, attaches[0])
+        if extra and not text:
+            text = extra
+
+    sender = getattr(message, "sender", None)
+    from_me = str(sender) == session.user_id and session.user_id != ""
+
+    await forward_to_app(
+        {
+            "channelId": session.channel_id,
+            "externalMessageId": str(getattr(message, "id", "")),
+            "externalChatId": str(chat_id),
+            "senderId": str(sender or ""),
+            "fromMe": from_me,
+            "type": msg_type,
+            "text": text,
+            "media": media,
+            "occurredAt": int(getattr(message, "time", 0) or 0),
+        }
+    )
+
+
+# --- HTTP ---------------------------------------------------------------
+
+
+def check_secret(request: web.Request) -> None:
+    if BRIDGE_SECRET and request.headers.get("X-Bridge-Secret") != BRIDGE_SECRET:
+        raise web.HTTPUnauthorized(text="bad secret")
+
+
+async def start_channel(request: web.Request) -> web.Response:
+    check_secret(request)
+    cid = request.match_info["cid"]
+    session = sessions.get(cid)
+    if session and session.status in {"online", "connecting", "qr"}:
+        return web.json_response({"status": session.status})
+
+    session = Session(channel_id=cid, status="connecting")
+    sessions[cid] = session
+    session.client = make_client(session)
+
+    async def run() -> None:
+        try:
+            await session.client.start()  # type: ignore[union-attr]
+        except Exception as err:  # noqa: BLE001
+            session.status = "offline"
+            session.error = str(err)[:300]
+            log.error("канал %s: %s", cid, session.error)
+
+    session.task = asyncio.create_task(run())
+    return web.json_response({"status": session.status})
+
+
+async def status_channel(request: web.Request) -> web.Response:
+    check_secret(request)
+    session = sessions.get(request.match_info["cid"])
+    if session is None:
+        return web.json_response({"status": "new"})
+    return web.json_response(
+        {
+            "status": session.status,
+            "qrUrl": session.qr_url,
+            "phone": session.phone,
+            "userId": session.user_id,
+            "error": session.error,
+        }
+    )
+
+
+async def send_message(request: web.Request) -> web.Response:
+    check_secret(request)
+    session = sessions.get(request.match_info["cid"])
+    if session is None or session.client is None or session.status != "online":
+        raise web.HTTPServiceUnavailable(text="канал не в сети")
+
+    body = await request.json()
+    chat_id = int(body["chatId"])
+    text = body.get("text") or None
+    reply_to = int(body["replyTo"]) if body.get("replyTo") else None
+    attachments = None
+
+    path = body.get("filePath")
+    if path:
+        from pymax.files import File, Photo, Video, Voice
+
+        kind = (body.get("type") or "").lower()
+        name = body.get("fileName")
+        cls = {"image": Photo, "video": Video, "voice": Voice}.get(kind, File)
+        attachments = [cls(path=path, name=name)]
+
+    msg = await session.client.send_message(
+        chat_id, text=text, reply_to=reply_to, attachments=attachments
+    )
+    return web.json_response({"messageId": str(getattr(msg, "id", ""))})
+
+
+async def search_phone(request: web.Request) -> web.Response:
+    """Найти собеседника по номеру — чтобы менеджер мог написать первым."""
+    check_secret(request)
+    session = sessions.get(request.match_info["cid"])
+    if session is None or session.client is None or session.status != "online":
+        raise web.HTTPServiceUnavailable(text="канал не в сети")
+    phone = request.query.get("phone", "")
+    user = await session.client.search_by_phone(phone)
+    if user is None:
+        return web.json_response({"found": False})
+    uid = getattr(user, "id", None) or getattr(getattr(user, "contact", None), "id", None)
+    return web.json_response({"found": True, "userId": str(uid or "")})
+
+
+async def stop_channel(request: web.Request) -> web.Response:
+    check_secret(request)
+    session = sessions.pop(request.match_info["cid"], None)
+    if session is not None:
+        session.stopping = True
+        try:
+            if session.client is not None:
+                await session.client.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        if session.task is not None:
+            session.task.cancel()
+    return web.json_response({"ok": True})
+
+
+async def health(_: web.Request) -> web.Response:
+    return web.json_response(
+        {"ok": True, "channels": {c: s.status for c, s in sessions.items()}}
+    )
+
+
+def build_app() -> web.Application:
+    app = web.Application()
+    app.router.add_get("/health", health)
+    app.router.add_post("/channels/{cid}/start", start_channel)
+    app.router.add_get("/channels/{cid}/status", status_channel)
+    app.router.add_post("/channels/{cid}/send", send_message)
+    app.router.add_get("/channels/{cid}/search", search_phone)
+    app.router.add_post("/channels/{cid}/stop", stop_channel)
+    return app
+
+
+if __name__ == "__main__":
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    log.info("служба MAX слушает порт %s", PORT)
+    web.run_app(build_app(), port=PORT, access_log=None)

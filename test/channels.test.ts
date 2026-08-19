@@ -15,17 +15,11 @@ describe('типы каналов', () => {
     expect(CAPABILITIES.max.banRisk).toBe(false)
   })
 
-  it('WhatsApp и Телеграм подключаются одинаково — по QR', () => {
-    expect(CAPABILITIES.whatsapp.connect).toBe('qr')
-    expect(CAPABILITIES.telegram.connect).toBe('qr')
-  })
-
-  it('писать первым нельзя только там, где подключаемся ботом', () => {
-    // WhatsApp и Телеграм подключаются как обычный клиент — ограничений нет.
-    expect(CAPABILITIES.whatsapp.canInitiate).toBe(true)
-    expect(CAPABILITIES.telegram.canInitiate).toBe(true)
-    // MAX подключается ботом, а бот не может написать первым.
-    expect(CAPABILITIES.max.canInitiate).toBe(false)
+  it('все три мессенджера подключаются личным аккаунтом и умеют писать первыми', () => {
+    for (const kind of ['whatsapp', 'telegram', 'max'] as const) {
+      expect(CAPABILITIES[kind].connect).toBe('qr')
+      expect(CAPABILITIES[kind].canInitiate).toBe(true)
+    }
   })
 
   it('чужие названия не считаются известными', () => {
@@ -49,9 +43,6 @@ describe('подбор драйвера', () => {
     expect(driver.channelId).toBe('id-2')
   })
 
-  it('для неготовых каналов ошибка понятна человеку', () => {
-    expect(() => createDriver('max', 'id-3', 'Тест')).toThrow(/MAX/)
-  })
 })
 
 describe('защита от двойной записи своих сообщений', () => {
@@ -87,5 +78,29 @@ describe('защита от двойной записи своих сообще�
     m.markSelfSent('канал-1', 'msg-1')
     expect(m.isSelfSent('канал-1', 'msg-1', now + 9 * 60 * 1000)).toBe(true)
     expect(m.isSelfSent('канал-1', 'msg-1', now + 11 * 60 * 1000)).toBe(false)
+  })
+})
+
+describe('MAX', () => {
+  it('драйвер есть и подключается по QR', async () => {
+    const driver = createDriver('max', 'id-max', 'MAX продажи')
+    expect(driver.kind).toBe('max')
+    expect(CAPABILITIES.max.connect).toBe('qr')
+  })
+
+  it('умеет писать первым — есть поиск по телефону', () => {
+    expect(CAPABILITIES.max.canInitiate).toBe(true)
+  })
+
+  it('пока не в сети — отправка отклоняется понятной ошибкой', async () => {
+    const driver = createDriver('max', 'id-max2', 'MAX продажи')
+    await expect(
+      driver.send({
+        channelId: 'id-max2',
+        externalChatId: '1',
+        type: 'text',
+        body: 'привет',
+      }),
+    ).rejects.toThrow(/не в сети/)
   })
 })

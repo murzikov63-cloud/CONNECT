@@ -85,8 +85,10 @@ export const CAPABILITIES: Record<ChannelKind, ChannelCapabilities> = {
     deliveryStatus: true,
   },
   max: {
-    connect: 'token',
-    canInitiate: false,
+    // Подключается личным аккаунтом по QR, как Телеграм.
+    connect: 'qr',
+    // Есть поиск собеседника по номеру телефона.
+    canInitiate: true,
     banRisk: false,
     media: true,
     voice: true,

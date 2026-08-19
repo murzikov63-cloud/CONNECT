@@ -54,6 +54,11 @@ const schema = z.object({
   ADMIN_PASSWORD: z.string().default(''),
   ADMIN_CORS_ORIGIN: z.string().default(''),
 
+  // Служба-переводчик к мессенджеру MAX: рабочая библиотека есть только
+  // на Python, поэтому она живёт отдельным процессом в докер-сети.
+  MAX_BRIDGE_URL: z.string().default('http://max-bridge:8090'),
+  BRIDGE_SECRET: z.string().default(''),
+
   MEDIA_DIR: z.string().default('/app/media'),
   MEDIA_TTL_DAYS: z.coerce.number().int().default(180),
   LOG_LEVEL: z.string().default('info'),

@@ -26,13 +26,13 @@ tar czf - --exclude=node_modules --exclude=dist --exclude=.git \
   | "${SSH[@]}" "tar xzf - -C $REMOTE"
 
 echo "== собираю образ"
-if ! "${SSH[@]}" "cd $REMOTE && docker compose build app"; then
+if ! "${SSH[@]}" "cd $REMOTE && docker compose build app max-bridge"; then
   echo "СБОРКА НЕ УДАЛАСЬ — на сервере продолжает работать прежняя версия" >&2
   exit 1
 fi
 
 echo "== перезапускаю сервис"
-"${SSH[@]}" "cd $REMOTE && docker compose up -d --force-recreate app"
+"${SSH[@]}" "cd $REMOTE && docker compose up -d --force-recreate app max-bridge"
 
 echo "== жду, пока поднимется"
 for _ in $(seq 1 30); do

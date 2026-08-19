@@ -62,6 +62,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      max-bridge: { condition: service_started }
     volumes:
       - media:/app/media
     expose:
@@ -72,6 +73,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  # Мессенджер MAX. Отдельный процесс на Python: рабочая библиотека
+  # для личного аккаунта MAX существует только там. Наружу не смотрит,
+  # разговаривает только с app внутри докер-сети.
+  max-bridge:
+    build: ./max-bridge
+    restart: unless-stopped
+    environment:
+      APP_URL: http://app:3000
+      BRIDGE_SECRET: ${BRIDGE_SECRET}
+      MEDIA_DIR: /app/media
+      SESSION_DIR: /data
+    volumes:
+      - media:/app/media
+      - maxsessions:/data
+    mem_limit: 320m
+    oom_score_adj: 300
+    expose:
+      - "8090"
 
   # Админка. Lovable собирает её как приложение с серверным рендерингом,
   # поэтому это отдельный процесс, а не набор файлов. Собирается на TONYAI,
@@ -112,6 +132,7 @@ services:
       - admin
 
 volumes:
+  maxsessions:
   pgdata:
   redisdata:
   media:
