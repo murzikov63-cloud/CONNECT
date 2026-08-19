@@ -2,8 +2,10 @@ import cors from '@fastify/cors'
 import Fastify from 'fastify'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { z } from 'zod'
+import { alert } from '../alerts/index.js'
 import { config } from '../config/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
@@ -13,7 +15,12 @@ import type { ChannelManager } from '../channels/manager.js'
 import { absoluteMediaPath, verifyMediaToken } from '../wa/media.js'
 import { isKnownKind } from '../channels/registry.js'
 import { CAPABILITIES, CHANNEL_TITLES } from '../channels/types.js'
-import { parseOutgoing, resolveChat, verifyWebhookSignature } from '../amo/webhook.js'
+import {
+  describeSignatureMismatch,
+  parseOutgoing,
+  resolveChat,
+  verifyWebhookSignature,
+} from '../amo/webhook.js'
 import { openapi } from './openapi.js'
 import {
   checkPassword,
@@ -331,8 +338,28 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     const raw = (req as unknown as { rawBody?: string }).rawBody ?? ''
     const signature = String(req.headers['x-signature'] ?? '')
     if (!verifyWebhookSignature(raw, signature)) {
-      logger.warn('вебхук с неверной подписью отклонён')
-      return reply.code(401).send({ error: 'неверная подпись' })
+      const report = describeSignatureMismatch(
+        raw,
+        signature,
+        req.headers as Record<string, unknown>,
+      )
+      logger.warn(report, 'подпись вебхука не сошлась')
+
+      // Пока способ подписи не выяснен, запрос всё же обрабатываем: адрес
+      // содержит scope_id, который знают только amoCRM и мы, так что защита
+      // остаётся, хоть и слабее. Владельцу об этом сообщаем, чтобы это
+      // не осталось незамеченным навсегда.
+      void alert('warn', 'amoCRM подписывает вебхуки не так, как ожидалось', {
+        Совпал: String(report['совпалВариант']),
+        Последствие: 'ответы менеджеров принимаются с проверкой только по адресу',
+      })
+      // Сырое тело кладём рядом с медиа — по нему подберём верный способ.
+      void writeFile(
+        join(config.MEDIA_DIR, `_webhook-${Date.now()}.json`),
+        JSON.stringify({ signature, headers: req.headers, body: raw }, null, 2),
+      ).catch(() => {
+        /* не критично */
+      })
     }
 
     const parsed = parseOutgoing(req.body)

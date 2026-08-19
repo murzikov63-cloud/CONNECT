@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { config } from '../config/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
@@ -16,6 +16,48 @@ export function verifyWebhookSignature(rawBody: string, signature: string): bool
   const b = Buffer.from(signature.toLowerCase())
   if (a.length !== b.length) return false
   return timingSafeEqual(a, b)
+}
+
+/**
+ * Разбор несошедшейся подписи. Пишет только длины и контрольные суммы,
+ * без содержимого сообщения. Нужен ровно один раз — чтобы понять, над чем
+ * именно amoCRM считает подпись.
+ */
+export function describeSignatureMismatch(
+  rawBody: string,
+  signature: string,
+  headers: Record<string, unknown>,
+): Record<string, unknown> {
+  const secret = config.AMO_CHAT_SECRET_KEY
+  const md5 = createHash('md5').update(rawBody).digest('hex')
+  const variants: Record<string, string> = {
+    'hmac-sha1(тело)': createHmac('sha1', secret).update(rawBody).digest('hex'),
+    'hmac-sha1(md5 тела)': createHmac('sha1', secret).update(md5).digest('hex'),
+    'hmac-sha1(md5 в байтах)': createHmac('sha1', secret)
+      .update(Buffer.from(md5, 'hex'))
+      .digest('hex'),
+    'hmac-sha1(тело), ключ hex': createHmac('sha1', Buffer.from(secret, 'hex'))
+      .update(rawBody)
+      .digest('hex'),
+    'sha1(секрет+тело)': createHash('sha1').update(`${secret}${rawBody}`).digest('hex'),
+    'sha1(тело+секрет)': createHash('sha1').update(`${rawBody}${secret}`).digest('hex'),
+    'hmac-sha1(тело+дата)': createHmac('sha1', secret)
+      .update(`${rawBody}${String(headers['date'] ?? '')}`)
+      .digest('hex'),
+    'hmac-sha1(scope+тело)': createHmac('sha1', secret)
+      .update(`${config.AMO_CHAT_SCOPE_ID}${rawBody}`)
+      .digest('hex'),
+  }
+  const matched = Object.entries(variants).find(([, v]) => v === signature.toLowerCase())
+
+  return {
+    получено: signature,
+    длинаТела: rawBody.length,
+    телоПолучено: rawBody !== '',
+    contentLength: headers['content-length'],
+    совпалВариант: matched?.[0] ?? 'ни один',
+    варианты: variants,
+  }
 }
 
 /** Типы amoCRM -> наши. */

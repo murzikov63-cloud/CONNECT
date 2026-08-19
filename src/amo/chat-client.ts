@@ -26,7 +26,10 @@ export async function amojoRequest<T>(
   }
 
   const body = payload === undefined ? '' : JSON.stringify(payload)
-  const headers = signRequest(method, path, body, config.AMO_CHAT_SECRET_KEY)
+  // Подпись считается по пути БЕЗ параметров запроса: с ними amoCRM
+  // отвечает 403. В документации это не сказано, выяснено опытом.
+  const signedPath = path.split('?')[0] ?? path
+  const headers = signRequest(method, signedPath, body, config.AMO_CHAT_SECRET_KEY)
 
   const response = await fetch(`${config.AMO_CHAT_BASE_URL}${path}`, {
     method,
