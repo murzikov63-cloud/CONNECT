@@ -23,6 +23,40 @@ for (const t of ['channels', 'channel_auth_state', 'chats', 'messages', 'outboun
   check(`таблица ${t}`, names.includes(t))
 }
 
+// Проверяем не только наличие таблиц, но и колонок, в которые пишет код.
+// Переименование колонки миграцией легко пропустить в одном из запросов —
+// и тогда падать будет уже на живых данных.
+const EXPECTED: Record<string, string[]> = {
+  channels: [
+    'id', 'kind', 'label', 'phone', 'external_id', 'status',
+    'last_qr', 'last_qr_at', 'last_connected_at', 'last_disconnect_reason', 'deleted_at',
+  ],
+  channel_auth_state: ['channel_id', 'key', 'value'],
+  chats: [
+    'id', 'channel_id', 'external_chat_id', 'phone', 'push_name', 'avatar_url',
+    'is_group', 'ignored', 'amo_chat_id', 'amo_contact_id', 'amo_lead_id',
+    'first_outbound_at', 'last_message_at',
+  ],
+  messages: [
+    'id', 'channel_id', 'chat_id', 'external_message_id', 'amo_message_id',
+    'direction', 'type', 'body', 'media_path', 'media_mime', 'media_name', 'media_size',
+    'quoted_external_message_id', 'sender_name', 'status', 'error',
+    'sent_at', 'delivered_at', 'read_at', 'occurred_at',
+  ],
+  outbound_daily: ['channel_id', 'day', 'new_chats'],
+  settings: ['key', 'value'],
+}
+
+for (const [table, columns] of Object.entries(EXPECTED)) {
+  const rows = await sql<{ column_name: string }[]>`
+    select column_name from information_schema.columns
+    where table_schema = 'public' and table_name = ${table}
+  `
+  const present = new Set(rows.map((r) => r.column_name))
+  const missing = columns.filter((c) => !present.has(c))
+  check(`колонки ${table}`, missing.length === 0, missing.length === 0 ? '' : `нет: ${missing.join(', ')}`)
+}
+
 const [num] = await sql<{ id: string }[]>`
   insert into channels (kind, label) values ('whatsapp', 'тестовый') returning id
 `
@@ -58,6 +92,25 @@ const bump = () => sql<{ new_chats: number }[]>`
 await bump()
 const [twice] = await bump()
 check('суточный счётчик новых чатов растёт', twice?.new_chats === 2, String(twice?.new_chats))
+
+// Тот самый запрос, которым менеджер записывает состояние канала.
+// Он ломался молча, когда колонку переименовали, а запрос забыли.
+try {
+  await sql`
+    update channels set
+      status = 'online',
+      phone = coalesce(${'79990000000'}, phone),
+      external_id = coalesce(${'79990000000@s.whatsapp.net'}, external_id),
+      last_connected_at = now(),
+      last_qr = null,
+      last_disconnect_reason = null,
+      updated_at = now()
+    where id = ${channelId}
+  `
+  check('запись состояния канала проходит', true)
+} catch (err) {
+  check('запись состояния канала проходит', false, err instanceof Error ? err.message : '')
+}
 
 // Миграции идемпотентны — повторный запуск не должен ничего ломать.
 await migrate()

@@ -52,7 +52,9 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     const saved = await loadSession(this.channelId)
     if (saved === '') {
       // Входа ещё не было — показываем QR, как в WhatsApp.
-      await this.loginByQr()
+      // Ждать сканирования здесь нельзя: пользователь может не подойти
+      // к телефону час, а запрос на создание канала должен вернуться сразу.
+      this.startQrLoginInBackground()
       return
     }
 
@@ -71,7 +73,7 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     if (!(await client.isUserAuthorized())) {
       this.ready = false
       this.logger.warn('сессия больше не действует, показываю новый QR')
-      await this.loginByQr()
+      this.startQrLoginInBackground()
       return
     }
 
@@ -86,7 +88,7 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
 
     this.ready = true
     this.logger.info({ phone }, 'аккаунт Телеграма в сети')
-    this.emit('status', 'online', { phone })
+    this.emit('status', 'online', { phone, externalId: String(me?.id ?? '') })
   }
 
   /**
@@ -96,6 +98,15 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
    * Библиотека сама обновляет ключ каждые несколько десятков секунд
    * и вызывает наш обработчик заново.
    */
+  private startQrLoginInBackground(): void {
+    void this.loginByQr().catch((err: unknown) => {
+      this.logger.error({ err }, 'вход по QR не удался')
+      this.emit('status', 'logged_out', {
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+
   private async loginByQr(): Promise<void> {
     const client = new TelegramClient(
       new StringSession(''),

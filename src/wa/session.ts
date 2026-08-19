@@ -134,7 +134,7 @@ export class WaSession extends EventEmitter {
       const rawId: string = this.sock?.user?.id ?? ''
       const phone = (rawId.split(':')[0] ?? '').replace(/\D/g, '')
       this.logger.info({ phone }, 'сессия онлайн')
-      this.emit('status', 'online', { phone })
+      this.emit('status', 'online', { phone, externalId: rawId })
       return
     }
 

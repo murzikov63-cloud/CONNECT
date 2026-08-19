@@ -13,12 +13,20 @@ import type { ChannelDriver, ChannelKind } from './types.js'
 
 const logger = log('manager')
 
+/** Что драйвер сообщает вместе со сменой состояния. */
+export interface StatusExtra {
+  reason?: string
+  phone?: string
+  /** Идентификатор аккаунта в самом мессенджере. */
+  externalId?: string
+}
+
 export interface ChannelRow {
   id: string
   kind: ChannelKind
   label: string
   phone: string | null
-  jid: string | null
+  external_id: string | null
   status: ChannelStatus
   last_connected_at: Date | null
   last_disconnect_reason: string | null
@@ -148,7 +156,7 @@ export class ChannelManager extends EventEmitter {
     const channelId = driver.channelId
     const session = driver
 
-    session.on('status', (status: ChannelStatus, extra: { reason?: string; phone?: string }) => {
+    session.on('status', (status: ChannelStatus, extra: StatusExtra) => {
       void this.onStatus(channelId, label, status, extra).catch((err: unknown) =>
         logger.error({ err, channelId }, 'ошибка обработки статуса'),
       )
@@ -178,13 +186,13 @@ export class ChannelManager extends EventEmitter {
     channelId: string,
     label: string,
     status: ChannelStatus,
-    extra: { reason?: string; phone?: string },
+    extra: StatusExtra,
   ): Promise<void> {
     await sql`
       update channels set
         status = ${status},
         phone = coalesce(${extra.phone ?? null}, phone),
-        jid = coalesce(${extra.phone !== undefined ? `${extra.phone}@s.whatsapp.net` : null}, jid),
+        external_id = coalesce(${extra.externalId ?? null}, external_id),
         last_connected_at = case when ${status} = 'online' then now() else last_connected_at end,
         last_qr = case when ${status} = 'online' then null else last_qr end,
         last_disconnect_reason = ${extra.reason ?? null},
