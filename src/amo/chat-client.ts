@@ -126,7 +126,14 @@ export async function createChat(conversationId: string, user: AmoUser): Promise
 export interface SendMessageInput {
   conversationId: string
   msgid: string
+  /** Кто отправил: клиент — для входящих, наш аккаунт — для исходящих. */
   sender: AmoUser
+  /**
+   * Кому. Заполняется только для исходящих: по паре «отправитель —
+   * получатель» amoCRM понимает, что сообщение от бизнеса, а не от клиента,
+   * и рисует его справа, а не слева.
+   */
+  receiver?: AmoUser
   type: AmoMessageType
   text: string
   media?: string
@@ -156,6 +163,7 @@ export async function sendMessageToAmo(input: SendMessageInput): Promise<SendMes
       msgid: input.msgid,
       conversation_id: input.conversationId,
       sender: input.sender,
+      ...(input.receiver !== undefined ? { receiver: input.receiver } : {}),
       message,
       silent: input.silent ?? false,
     },

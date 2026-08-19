@@ -55,6 +55,17 @@ function conversationId(row: Row): string {
   return `${row.channel_kind}-${row.chat_id}`
 }
 
+/**
+ * Наш аккаунт как отправитель. Нужен для сообщений, которые менеджер
+ * отправил прямо из WhatsApp или Телеграма на телефоне, минуя amoCRM.
+ */
+function buildBusinessUser(row: Row): AmoUser {
+  return {
+    id: `${row.channel_kind}-me-${row.channel_label}`,
+    name: row.channel_label,
+  }
+}
+
 function buildSender(row: Row): AmoUser {
   const user: AmoUser = {
     id: `${row.channel_kind}-${row.external_chat_id}`,
@@ -147,20 +158,22 @@ export function createInboundWorker(): Worker<InboundJob> {
         return
       }
 
-      // Сообщения, отправленные с самого телефона, пока не передаём:
-      // формат исходящих в amoCRM отличается, и без проверки на живом
-      // аккаунте есть риск намусорить в карточках.
-      if (row.direction === 'out') {
-        logger.info({ messageId: row.message_id }, 'своё исходящее с телефона — пропускаю')
-        return
-      }
-
       await ensureAmoEntities(row)
+
+      // Менеджер вполне может ответить прямо с телефона, минуя amoCRM.
+      // Такие сообщения тоже должны быть в карточке, иначе там будет
+      // половина разговора. Отличаются они парой «отправитель — получатель»:
+      // для исходящих отправитель — мы, получатель — клиент.
+      const isOutgoing = row.direction === 'out'
+      const client = buildSender(row)
 
       const result = await sendMessageToAmo({
         conversationId: conversationId(row),
         msgid: `msg-${row.message_id}`,
-        sender: buildSender(row),
+        sender: isOutgoing ? buildBusinessUser(row) : client,
+        ...(isOutgoing ? { receiver: client } : {}),
+        // Своё же отправленное не должно дёргать менеджера уведомлением.
+        silent: isOutgoing,
         type: toAmoType(row.type),
         text: row.body ?? '',
         ...(toPublicUrl(row.media_path) !== undefined

@@ -57,6 +57,39 @@ export interface ChatRow {
 export class ChannelManager extends EventEmitter {
   private readonly drivers = new Map<string, ChannelDriver>()
 
+  /**
+   * Сообщения, которые мы только что отправили сами.
+   *
+   * Мессенджер возвращает их нам эхом как «отправленные с этого аккаунта».
+   * Без такой пометки ответ менеджера ушёл бы в карточку дважды: один раз
+   * из amoCRM, второй — эхом из мессенджера. На уникальный индекс в базе
+   * полагаться нельзя: эхо приходит за миллисекунды и может обогнать
+   * запись идентификатора.
+   */
+  private readonly selfSent = new Map<string, number>()
+  private static readonly SELF_SENT_TTL_MS = 10 * 60 * 1000
+
+  markSelfSent(channelId: string, externalMessageId: string): void {
+    const now = Date.now()
+    this.selfSent.set(`${channelId}:${externalMessageId}`, now)
+    // Заодно подчищаем старое, чтобы карта не росла бесконечно.
+    for (const [key, at] of this.selfSent) {
+      if (now - at > ChannelManager.SELF_SENT_TTL_MS) this.selfSent.delete(key)
+    }
+  }
+
+  /** Публичный ради проверок: без этого поведение не покрыть тестом. */
+  isSelfSent(channelId: string, externalMessageId: string, now: number = Date.now()): boolean {
+    const key = `${channelId}:${externalMessageId}`
+    const at = this.selfSent.get(key)
+    if (at === undefined) return false
+    if (now - at > ChannelManager.SELF_SENT_TTL_MS) {
+      this.selfSent.delete(key)
+      return false
+    }
+    return true
+  }
+
   async bootstrap(): Promise<void> {
     const numbers = await sql<ChannelRow[]>`
       select * from channels
@@ -226,6 +259,12 @@ export class ChannelManager extends EventEmitter {
 
     if (msg.isGroup && settings.ignoreGroups) return
     if (isPersonalNumber(settings, msg.phone)) return
+
+    // Эхо нашей же отправки: сообщение уже есть и в базе, и в amoCRM.
+    if (msg.fromMe && this.isSelfSent(msg.channelId, msg.externalMessageId)) {
+      logger.debug({ externalMessageId: msg.externalMessageId }, 'эхо своей отправки, пропускаю')
+      return
+    }
 
     const chat = await this.upsertChat(msg)
     if (chat.ignored) return

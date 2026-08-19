@@ -53,3 +53,39 @@ describe('подбор драйвера', () => {
     expect(() => createDriver('max', 'id-3', 'Тест')).toThrow(/MAX/)
   })
 })
+
+describe('защита от двойной записи своих сообщений', () => {
+  // Без неё ответ менеджера попал бы в карточку дважды: один раз из amoCRM,
+  // второй — эхом, которым мессенджер возвращает нам нашу же отправку.
+  it('помеченное узнаётся', async () => {
+    const { ChannelManager } = await import('../src/channels/manager.js')
+    const m = new ChannelManager()
+    m.markSelfSent('канал-1', 'msg-1')
+    expect(m.isSelfSent('канал-1', 'msg-1')).toBe(true)
+  })
+
+  it('чужое сообщение своим не считается', async () => {
+    const { ChannelManager } = await import('../src/channels/manager.js')
+    const m = new ChannelManager()
+    m.markSelfSent('канал-1', 'msg-1')
+    expect(m.isSelfSent('канал-1', 'msg-2')).toBe(false)
+  })
+
+  it('идентификаторы разных каналов не путаются', async () => {
+    const { ChannelManager } = await import('../src/channels/manager.js')
+    const m = new ChannelManager()
+    m.markSelfSent('канал-1', 'msg-1')
+    // В Телеграме идентификаторы — обычные числа, они легко совпадут
+    // с идентификаторами другого канала.
+    expect(m.isSelfSent('канал-2', 'msg-1')).toBe(false)
+  })
+
+  it('через десять минут пометка отпускает', async () => {
+    const { ChannelManager } = await import('../src/channels/manager.js')
+    const m = new ChannelManager()
+    const now = Date.now()
+    m.markSelfSent('канал-1', 'msg-1')
+    expect(m.isSelfSent('канал-1', 'msg-1', now + 9 * 60 * 1000)).toBe(true)
+    expect(m.isSelfSent('канал-1', 'msg-1', now + 11 * 60 * 1000)).toBe(false)
+  })
+})

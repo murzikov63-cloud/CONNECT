@@ -76,6 +76,8 @@ export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJo
       await sleep(randomDelay(minMs, maxMs))
 
       const externalMessageId = await driver.send(out)
+      // Помечаем до записи в базу: эхо из мессенджера прилетает почти мгновенно.
+      manager.markSelfSent(out.channelId, externalMessageId)
 
       await sql`
         update messages set
