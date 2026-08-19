@@ -44,9 +44,7 @@
 	# на одном домене: межсайтовых разрешений (CORS) не нужно вовсе,
 	# и постороннему сайту дёрнуть наш API нечем.
 	handle {
-		root * /srv/admin
-		try_files {path} /index.html
-		file_server
+		reverse_proxy admin:3000
 	}
 
 	log {

@@ -73,6 +73,26 @@ services:
       retries: 3
       start_period: 30s
 
+  # Админка. Lovable собирает её как приложение с серверным рендерингом,
+  # поэтому это отдельный процесс, а не набор файлов. Собирается на TONYAI,
+  # сюда приезжает уже готовой — дроплету сборку не доверяем, у него одно ядро.
+  admin:
+    image: node:20-bookworm-slim
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", ".output/server/index.mjs"]
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+    volumes:
+      - ./admin-dist:/app/.output:ro
+    mem_limit: 256m
+    # Админка — не самое важное: если памяти не хватит, пусть падает она,
+    # а не переписка с клиентами.
+    oom_score_adj: 400
+    expose:
+      - "3000"
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -85,11 +105,11 @@ services:
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/origin:/etc/caddy/origin:ro
-      - ./admin-dist:/srv/admin:ro
       - caddydata:/data
       - caddyconfig:/config
     depends_on:
       - app
+      - admin
 
 volumes:
   pgdata:

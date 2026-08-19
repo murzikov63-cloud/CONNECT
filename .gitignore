@@ -5,3 +5,4 @@ dist/
 media/
 backups/
 caddy/origin/*.pem
+admin-dist/

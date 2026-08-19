@@ -25,12 +25,12 @@ fi
 echo "== собираю"
 cd "$APP"
 npm ci
-npm run build
+# Пресет node: по умолчанию Lovable собирает под Cloudflare Workers,
+# а нам нужен обычный процесс Node рядом с API.
+NITRO_PRESET=node-server npm run build
 
-DIST="dist"
-[ -d "$DIST" ] || DIST="build"
-[ -d "$DIST" ] || { echo "не нашёл собранные файлы (ни dist, ни build)"; exit 1; }
-[ -f "$DIST/index.html" ] || { echo "в $DIST нет index.html"; exit 1; }
+DIST=".output"
+[ -f "$DIST/server/index.mjs" ] || { echo "не нашёл собранный сервер в $DIST"; exit 1; }
 
 echo "== заливаю на $SERVER"
 tar czf - -C "$DIST" . | ssh -i "$KEY" -o StrictHostKeyChecking=no "$SERVER" '
@@ -43,6 +43,6 @@ tar czf - -C "$DIST" . | ssh -i "$KEY" -o StrictHostKeyChecking=no "$SERVER" '
   mv /opt/messenger-connect/admin-dist /opt/messenger-connect/admin-dist.old 2>/dev/null || true
   mv /opt/messenger-connect/admin-dist.new /opt/messenger-connect/admin-dist
   rm -rf /opt/messenger-connect/admin-dist.old
-  cd /opt/messenger-connect && docker compose restart caddy >/dev/null
+  cd /opt/messenger-connect && docker compose up -d admin >/dev/null && docker compose restart admin caddy >/dev/null
 '
 echo "== готово: https://connect.indolight.com"
