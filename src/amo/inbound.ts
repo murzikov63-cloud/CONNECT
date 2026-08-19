@@ -66,10 +66,25 @@ function buildBusinessUser(row: Row): AmoUser {
   }
 }
 
+/** Имя клиента как есть — им называется карточка контакта в amoCRM. */
+function clientName(row: Row): string {
+  const name = row.push_name ?? row.sender_name ?? ''
+  return name === '' ? 'Без имени' : name
+}
+
+/**
+ * Имя в самой беседе: с пометкой мессенджера.
+ *
+ * Канал в amoCRM у нас один на все мессенджеры, поэтому в списке источников
+ * карточки все наши беседы называются одинаково. Если клиент пишет и в
+ * Телеграм, и в WhatsApp, менеджер не отличит их и ответит не туда —
+ * так уже случалось. Пометка в имени эту путаницу снимает.
+ */
 function buildSender(row: Row): AmoUser {
+  const title = row.channel_kind === 'telegram' ? 'Телеграм' : row.channel_kind === 'max' ? 'MAX' : 'WhatsApp'
   const user: AmoUser = {
     id: `${row.channel_kind}-${row.external_chat_id}`,
-    name: row.push_name ?? row.sender_name ?? 'Без имени',
+    name: `${clientName(row)} · ${title}`,
   }
   const avatar = toPublicUrl(row.avatar_url)
   if (avatar !== undefined) user.avatar = avatar
@@ -115,7 +130,8 @@ async function ensureAmoEntities(row: Row): Promise<{ amoChatId: string }> {
     // Дедупликация по телефону: если контакт уже есть — пишем в него,
     // а не плодим второй с тем же номером.
     const existing = phone === '' ? null : await findContactByPhone(phone)
-    const contact = existing ?? (await createContact(buildSender(row).name, phone))
+    // В карточку контакта пишем чистое имя, без пометки мессенджера.
+    const contact = existing ?? (await createContact(clientName(row), phone))
 
     await sql`
       update chats set amo_contact_id = ${contact.id}, updated_at = now() where id = ${row.chat_id}
