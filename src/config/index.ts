@@ -26,12 +26,22 @@ const schema = z.object({
   AMO_AMOJO_ID: z.string().default(''),
   AMO_API_DOMAIN: z.string().default('api-b.amocrm.ru'),
 
-  // Приходят от техподдержки amoCRM после регистрации канала.
-  AMO_CHAT_CHANNEL_ID: z.string().default(''),
-  AMO_CHAT_SECRET_KEY: z.string().default(''),
-  AMO_CHAT_CODE: z.string().default(''),
-  AMO_CHAT_SCOPE_ID: z.string().default(''),
+  // Каналы чатов amoCRM — свой на каждый мессенджер. Так менеджер видит,
+  // откуда пришла переписка, и может начать разговор в нужном мессенджере.
+  // Ключи выдаёт техподдержка amoCRM по заявке.
   AMO_CHAT_BASE_URL: z.string().default('https://amojo.amocrm.ru'),
+
+  AMO_WA_CHANNEL_ID: z.string().default(''),
+  AMO_WA_SECRET_KEY: z.string().default(''),
+  AMO_WA_SCOPE_ID: z.string().default(''),
+
+  AMO_TG_CHANNEL_ID: z.string().default(''),
+  AMO_TG_SECRET_KEY: z.string().default(''),
+  AMO_TG_SCOPE_ID: z.string().default(''),
+
+  AMO_MAX_CHANNEL_ID: z.string().default(''),
+  AMO_MAX_SECRET_KEY: z.string().default(''),
+  AMO_MAX_SCOPE_ID: z.string().default(''),
 
   TG_BOT_TOKEN: z.string().default(''),
   // Ключи приложения с my.telegram.org — общие для всех подключаемых номеров.
@@ -71,6 +81,6 @@ if (!parsed.success) {
 export const config = parsed.data
 export type Config = typeof config
 
-/** Chat API amoCRM ещё не подключён — до ответа техподдержки это нормально. */
+/** Есть ли хотя бы один настроенный канал чатов. */
 export const chatApiReady = (): boolean =>
-  config.AMO_CHAT_CHANNEL_ID !== '' && config.AMO_CHAT_SECRET_KEY !== ''
+  config.AMO_TG_SCOPE_ID !== '' || config.AMO_WA_SCOPE_ID !== '' || config.AMO_MAX_SCOPE_ID !== ''

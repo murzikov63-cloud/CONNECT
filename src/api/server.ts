@@ -6,7 +6,8 @@ import { stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { alert } from '../alerts/index.js'
-import { config } from '../config/index.js'
+import { channelForScope } from '../amo/channels.js'
+import { chatApiReady, config } from '../config/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import { outboundQueue } from '../queue/index.js'
@@ -214,7 +215,7 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     return {
       ok: true,
       uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
-      chatApiConnected: config.AMO_CHAT_CHANNEL_ID !== '' && config.AMO_CHAT_SCOPE_ID !== '',
+      chatApiConnected: chatApiReady(),
       numbers: {
         total: numbers.length,
         online: numbers.filter((n) => n.status === 'online').length,
@@ -331,14 +332,18 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
    * Отвечаем быстро: тяжёлое делает очередь.
    */
   app.post<{ Params: { scopeId: string } }>('/amojo/:scopeId', async (req, reply) => {
-    if (req.params.scopeId !== config.AMO_CHAT_SCOPE_ID) {
+    // По адресу понимаем, какого мессенджера пришёл ответ: у каждого
+    // свой канал и свой ключ для проверки подписи.
+    const amoChannel = channelForScope(req.params.scopeId)
+    if (amoChannel === null) {
       return reply.code(404).send({ error: 'неизвестный канал' })
     }
 
     const raw = (req as unknown as { rawBody?: string }).rawBody ?? ''
     const signature = String(req.headers['x-signature'] ?? '')
-    if (!verifyWebhookSignature(raw, signature)) {
+    if (!verifyWebhookSignature(amoChannel.secretKey, raw, signature)) {
       const report = describeSignatureMismatch(
+        amoChannel,
         raw,
         signature,
         req.headers as Record<string, unknown>,

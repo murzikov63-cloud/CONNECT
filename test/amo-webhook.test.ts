@@ -3,24 +3,31 @@ import { describe, expect, it } from 'vitest'
 import { fromAmoType, parseOutgoing, verifyWebhookSignature } from '../src/amo/webhook.js'
 import { toAmoType } from '../src/amo/chat-client.js'
 
-const SECRET = process.env['AMO_CHAT_SECRET_KEY'] ?? ''
+const SECRET = 'тестовый-секрет-канала'
 
 describe('подпись вебхука', () => {
+  it('ключ другого канала не подходит', () => {
+    const body = '{"a":1}'
+    const sig = createHmac('sha1', SECRET).update(body).digest('hex')
+    // У каждого мессенджера свой канал и свой ключ: подпись одного
+    // не должна проходить проверку другого.
+    expect(verifyWebhookSignature('ключ-другого-канала', body, sig)).toBe(false)
+  })
+
   it('без подписи не пропускает', () => {
-    expect(verifyWebhookSignature('{}', '')).toBe(false)
+    expect(verifyWebhookSignature(SECRET, '{}', '')).toBe(false)
   })
 
   it('чужая подпись не проходит', () => {
-    expect(verifyWebhookSignature('{}', 'a'.repeat(40))).toBe(false)
+    expect(verifyWebhookSignature(SECRET, '{}', 'a'.repeat(40))).toBe(false)
   })
 
   it('верная подпись принимается', () => {
-    if (SECRET === '') return
     const body = '{"a":1}'
     const sig = createHmac('sha1', SECRET).update(body).digest('hex')
-    expect(verifyWebhookSignature(body, sig)).toBe(true)
-    expect(verifyWebhookSignature(body, sig.toUpperCase())).toBe(true)
-    expect(verifyWebhookSignature('{"a":2}', sig)).toBe(false)
+    expect(verifyWebhookSignature(SECRET, body, sig)).toBe(true)
+    expect(verifyWebhookSignature(SECRET, body, sig.toUpperCase())).toBe(true)
+    expect(verifyWebhookSignature(SECRET, '{"a":2}', sig)).toBe(false)
   })
 })
 

@@ -1,5 +1,6 @@
 import { config } from '../config/index.js'
 import { log } from '../logger/index.js'
+import type { AmoChannel } from './channels.js'
 import { signRequest } from './signature.js'
 
 const logger = log('amo-chat')
@@ -15,21 +16,22 @@ export class AmoChatError extends Error {
   }
 }
 
-/** Низкоуровневый подписанный запрос к amojo. */
+/** Низкоуровневый подписанный запрос к amojo. Подпись — ключом своего канала. */
 export async function amojoRequest<T>(
+  channel: AmoChannel,
   method: 'GET' | 'POST',
   path: string,
   payload?: unknown,
 ): Promise<T> {
-  if (config.AMO_CHAT_SECRET_KEY === '') {
-    throw new Error('Не задан AMO_CHAT_SECRET_KEY — канал чатов ещё не подключён')
+  if (channel.secretKey === '') {
+    throw new Error(`Для канала «${channel.kind}» не задан ключ amoCRM`)
   }
 
   const body = payload === undefined ? '' : JSON.stringify(payload)
   // Подпись считается по пути БЕЗ параметров запроса: с ними amoCRM
   // отвечает 403. В документации это не сказано, выяснено опытом.
   const signedPath = path.split('?')[0] ?? path
-  const headers = signRequest(method, signedPath, body, config.AMO_CHAT_SECRET_KEY)
+  const headers = signRequest(method, signedPath, body, channel.secretKey)
 
   const response = await fetch(`${config.AMO_CHAT_BASE_URL}${path}`, {
     method,
@@ -57,10 +59,15 @@ export interface ConnectResult {
  * им amoCRM подписывает вебхуки и по нему мы отличаем аккаунт.
  * Операция идемпотентная: повторный вызов вернёт тот же scope_id.
  */
-export async function connectChannel(amojoId: string, title: string): Promise<ConnectResult> {
+export async function connectChannel(
+  channel: AmoChannel,
+  amojoId: string,
+  title: string,
+): Promise<ConnectResult> {
   return amojoRequest<ConnectResult>(
+    channel,
     'POST',
-    `/v2/origin/custom/${config.AMO_CHAT_CHANNEL_ID}/connect`,
+    `/v2/origin/custom/${channel.channelId}/connect`,
     { account_id: amojoId, title, hook_api_version: 'v2' },
   )
 }
@@ -118,10 +125,15 @@ export interface CreateChatResult {
  * Создаёт чат на стороне amoCRM. Идемпотентно: повторный вызов с тем же
  * conversation_id возвращает тот же чат.
  */
-export async function createChat(conversationId: string, user: AmoUser): Promise<CreateChatResult> {
+export async function createChat(
+  channel: AmoChannel,
+  conversationId: string,
+  user: AmoUser,
+): Promise<CreateChatResult> {
   return amojoRequest<CreateChatResult>(
+    channel,
     'POST',
-    `/v2/origin/custom/${config.AMO_CHAT_SCOPE_ID}/chats`,
+    `/v2/origin/custom/${channel.scopeId}/chats`,
     { conversation_id: conversationId, user },
   )
 }
@@ -152,13 +164,16 @@ export interface SendMessageResult {
 }
 
 /** Кладёт входящее сообщение в чат amoCRM. */
-export async function sendMessageToAmo(input: SendMessageInput): Promise<SendMessageResult> {
+export async function sendMessageToAmo(
+  channel: AmoChannel,
+  input: SendMessageInput,
+): Promise<SendMessageResult> {
   const message: Record<string, unknown> = { type: input.type, text: input.text }
   if (input.media !== undefined) message['media'] = input.media
   if (input.fileName !== undefined) message['file_name'] = input.fileName
   if (input.fileSize !== undefined) message['file_size'] = input.fileSize
 
-  return amojoRequest<SendMessageResult>('POST', `/v2/origin/custom/${config.AMO_CHAT_SCOPE_ID}`, {
+  return amojoRequest<SendMessageResult>(channel, 'POST', `/v2/origin/custom/${channel.scopeId}`, {
     event_type: 'new_message',
     payload: {
       timestamp: Math.floor(input.occurredAt.getTime() / 1000),
@@ -178,6 +193,7 @@ export const DELIVERY = { delivered: 1, read: 2, failed: -1 } as const
 
 /** Отмечает в amoCRM, что сообщение менеджера дошло, прочитано или не ушло. */
 export async function setDeliveryStatus(
+  channel: AmoChannel,
   amoMessageId: string,
   statusCode: number,
   error?: string,
@@ -189,17 +205,16 @@ export async function setDeliveryStatus(
     body['error'] = error.slice(0, 300)
   }
   await amojoRequest(
+    channel,
     'POST',
-    `/v2/origin/custom/${config.AMO_CHAT_SCOPE_ID}/${amoMessageId}/delivery_status`,
+    `/v2/origin/custom/${channel.scopeId}/${amoMessageId}/delivery_status`,
     body,
   )
 }
 
 /** Отвязывает канал от аккаунта — на случай отката. */
-export async function disconnectChannel(amojoId: string): Promise<void> {
-  await amojoRequest(
-    'POST',
-    `/v2/origin/custom/${config.AMO_CHAT_CHANNEL_ID}/disconnect`,
-    { account_id: amojoId },
-  )
+export async function disconnectChannel(channel: AmoChannel, amojoId: string): Promise<void> {
+  await amojoRequest(channel, 'POST', `/v2/origin/custom/${channel.channelId}/disconnect`, {
+    account_id: amojoId,
+  })
 }

@@ -1,5 +1,4 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
-import { config } from '../config/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import type { MessageType } from '../types.js'
@@ -8,10 +7,14 @@ const logger = log('amo-webhook')
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/** Подпись вебхука: HMAC-SHA1 от сырого тела на секрете канала. */
-export function verifyWebhookSignature(rawBody: string, signature: string): boolean {
-  if (config.AMO_CHAT_SECRET_KEY === '' || signature === '') return false
-  const expected = createHmac('sha1', config.AMO_CHAT_SECRET_KEY).update(rawBody).digest('hex')
+/** Подпись вебхука: HMAC-SHA1 от сырого тела на секрете своего канала. */
+export function verifyWebhookSignature(
+  secretKey: string,
+  rawBody: string,
+  signature: string,
+): boolean {
+  if (secretKey === '' || signature === '') return false
+  const expected = createHmac('sha1', secretKey).update(rawBody).digest('hex')
   const a = Buffer.from(expected)
   const b = Buffer.from(signature.toLowerCase())
   if (a.length !== b.length) return false
@@ -24,11 +27,12 @@ export function verifyWebhookSignature(rawBody: string, signature: string): bool
  * именно amoCRM считает подпись.
  */
 export function describeSignatureMismatch(
+  channel: { secretKey: string; scopeId: string },
   rawBody: string,
   signature: string,
   headers: Record<string, unknown>,
 ): Record<string, unknown> {
-  const secret = config.AMO_CHAT_SECRET_KEY
+  const secret = channel.secretKey
   const md5 = createHash('md5').update(rawBody).digest('hex')
   const variants: Record<string, string> = {
     'hmac-sha1(тело)': createHmac('sha1', secret).update(rawBody).digest('hex'),
@@ -45,7 +49,7 @@ export function describeSignatureMismatch(
       .update(`${rawBody}${String(headers['date'] ?? '')}`)
       .digest('hex'),
     'hmac-sha1(scope+тело)': createHmac('sha1', secret)
-      .update(`${config.AMO_CHAT_SCOPE_ID}${rawBody}`)
+      .update(`${channel.scopeId}${rawBody}`)
       .digest('hex'),
   }
   const matched = Object.entries(variants).find(([, v]) => v === signature.toLowerCase())

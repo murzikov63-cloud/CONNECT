@@ -7,6 +7,7 @@ import { QUEUE_INBOUND, connection } from '../queue/index.js'
 import type { InboundJob } from '../queue/index.js'
 import { getSettings } from '../settings.js'
 import { mediaUrl } from '../wa/media.js'
+import { channelForKind } from './channels.js'
 import { createChat, sendMessageToAmo, toAmoType } from './chat-client.js'
 import type { AmoUser } from './chat-client.js'
 import {
@@ -115,10 +116,11 @@ async function loadRow(messageId: string): Promise<Row | null> {
 
 /** Заводит чат, контакт и сделку в amoCRM — по одному разу на переписку. */
 async function ensureAmoEntities(row: Row): Promise<{ amoChatId: string }> {
+  const amoChannel = channelForKind(row.channel_kind as never)
   let amoChatId = row.amo_chat_id
 
   if (amoChatId === null) {
-    const created = await createChat(conversationId(row), buildSender(row))
+    const created = await createChat(amoChannel, conversationId(row), buildSender(row))
     amoChatId = created.id
     await sql`update chats set amo_chat_id = ${amoChatId}, updated_at = now() where id = ${row.chat_id}`
     logger.info({ chatId: row.chat_id, amoChatId }, 'чат создан в amoCRM')
@@ -182,7 +184,7 @@ export function createInboundWorker(): Worker<InboundJob> {
       const isOutgoing = row.direction === 'out'
       const client = buildSender(row)
 
-      const result = await sendMessageToAmo({
+      const result = await sendMessageToAmo(channelForKind(row.channel_kind as never), {
         conversationId: conversationId(row),
         msgid: `msg-${row.message_id}`,
         sender: isOutgoing ? buildBusinessUser(row) : client,
