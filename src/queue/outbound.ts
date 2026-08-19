@@ -5,7 +5,7 @@ import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import { getSettings } from '../settings.js'
 import { randomDelay, sleep } from '../utils.js'
-import type { SessionManager } from '../wa/manager.js'
+import type { ChannelManager } from '../channels/manager.js'
 import { QUEUE_OUTBOUND, connection } from './index.js'
 import type { OutboundJob } from './index.js'
 
@@ -19,11 +19,11 @@ class PermanentError extends Error {}
  * контакту — самый заметный для WhatsApp признак рассылки, поэтому
  * лимитируем именно его (раздел 5 ТЗ).
  */
-async function reserveNewChatSlot(numberId: string, limit: number): Promise<boolean> {
+async function reserveNewChatSlot(channelId: string, limit: number): Promise<boolean> {
   const rows = await sql<{ new_chats: number }[]>`
-    insert into outbound_daily (number_id, day, new_chats)
-    values (${numberId}, current_date, 1)
-    on conflict (number_id, day) do update set new_chats = outbound_daily.new_chats + 1
+    insert into outbound_daily (channel_id, day, new_chats)
+    values (${channelId}, current_date, 1)
+    on conflict (channel_id, day) do update set new_chats = outbound_daily.new_chats + 1
     returning new_chats
   `
   const used = rows[0]?.new_chats ?? 0
@@ -31,34 +31,34 @@ async function reserveNewChatSlot(numberId: string, limit: number): Promise<bool
 
   await sql`
     update outbound_daily set new_chats = new_chats - 1
-    where number_id = ${numberId} and day = current_date
+    where channel_id = ${channelId} and day = current_date
   `
   return false
 }
 
-export function createOutboundWorker(manager: SessionManager): Worker<OutboundJob> {
+export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJob> {
   const worker = new Worker<OutboundJob>(
     QUEUE_OUTBOUND,
     async (job: Job<OutboundJob>) => {
       const out = job.data
       const settings = await getSettings()
 
-      const session = manager.getSession(out.numberId)
-      if (session === undefined || session.socket === null) {
+      const driver = manager.getDriver(out.channelId)
+      if (driver === undefined || !driver.isReady()) {
         // Номер поднимется сам — пусть очередь подождёт и попробует снова.
-        throw new Error(`сессия номера ${out.numberId} сейчас не в сети`)
+        throw new Error(`канал ${out.channelId} сейчас не в сети`)
       }
 
       const chats = await sql<{ id: string; first_outbound_at: Date | null }[]>`
         select id, first_outbound_at from chats
-        where number_id = ${out.numberId} and chat_jid = ${out.chatJid}
+        where channel_id = ${out.channelId} and external_chat_id = ${out.externalChatId}
       `
       const chat = chats[0]
       const isNewChat = chat === undefined || chat.first_outbound_at === null
 
       if (isNewChat) {
         const allowed = await reserveNewChatSlot(
-          out.numberId,
+          out.channelId,
           settings.newChatsPerNumberPerDay,
         )
         if (!allowed) {
@@ -75,11 +75,11 @@ export function createOutboundWorker(manager: SessionManager): Worker<OutboundJo
         : [settings.replyDelayMinMs, settings.replyDelayMaxMs]
       await sleep(randomDelay(minMs, maxMs))
 
-      const waMessageId = await session.send(out)
+      const externalMessageId = await driver.send(out)
 
       await sql`
         update messages set
-          wa_message_id = ${waMessageId}, status = 'sent', sent_at = now(), error = null
+          external_message_id = ${externalMessageId}, status = 'sent', sent_at = now(), error = null
         where id = ${out.dbMessageId}
       `
       if (chat !== undefined && isNewChat) {
@@ -88,8 +88,8 @@ export function createOutboundWorker(manager: SessionManager): Worker<OutboundJo
         `
       }
 
-      logger.info({ numberId: out.numberId, waMessageId }, 'исходящее отправлено')
-      return { waMessageId }
+      logger.info({ channelId: out.channelId, externalMessageId }, 'исходящее отправлено')
+      return { externalMessageId }
     },
     {
       connection,
@@ -115,8 +115,8 @@ export function createOutboundWorker(manager: SessionManager): Worker<OutboundJo
         where id = ${job.data.dbMessageId}
       `
       await alert('error', 'Сообщение не ушло в WhatsApp', {
-        Номер: job.data.numberId,
-        Чат: job.data.chatJid,
+        Номер: job.data.channelId,
+        Чат: job.data.externalChatId,
         Причина: err.message,
       })
     })().catch((e: unknown) => logger.error({ err: e }, 'не смог пометить провал отправки'))

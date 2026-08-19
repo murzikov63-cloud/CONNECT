@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import QRCode from 'qrcode'
 import { log } from '../logger/index.js'
-import type { DeliveryStatus, InboundMessage, MediaPayload, NumberStatus, OutboundMessage } from '../types.js'
+import type { DeliveryStatus, InboundMessage, MediaPayload, ChannelStatus, OutboundMessage } from '../types.js'
 import {
   DisconnectReason,
   downloadMediaMessage,
@@ -10,6 +10,7 @@ import {
   makeWASocket,
 } from './baileys.js'
 import type { WASocket } from './baileys.js'
+import { CAPABILITIES } from '../channels/types.js'
 import { usePostgresAuthState } from './auth-state.js'
 import { absoluteMediaPath, saveMedia } from './media.js'
 import { extractContent, normalizeInbound } from './normalize.js'
@@ -28,10 +29,10 @@ const STATUS_BY_CODE: Record<number, DeliveryStatus> = {
 }
 
 export interface SessionEvents {
-  status: [NumberStatus, { reason?: string; phone?: string }]
+  status: [ChannelStatus, { reason?: string; phone?: string }]
   qr: [string]
   inbound: [InboundMessage]
-  delivery: [{ waMessageId: string; status: DeliveryStatus }]
+  delivery: [{ externalMessageId: string; status: DeliveryStatus }]
 }
 
 /**
@@ -40,7 +41,7 @@ export interface SessionEvents {
  * занимается SessionManager.
  */
 export class WaSession extends EventEmitter {
-  readonly numberId: string
+  readonly channelId: string
   readonly label: string
 
   private sock: WASocket | null = null
@@ -50,11 +51,11 @@ export class WaSession extends EventEmitter {
   private stopping = false
   private readonly logger
 
-  constructor(numberId: string, label: string) {
+  constructor(channelId: string, label: string) {
     super()
-    this.numberId = numberId
+    this.channelId = channelId
     this.label = label
-    this.logger = log('wa').child({ numberId, label })
+    this.logger = log('wa').child({ channelId, label })
   }
 
   get socket(): WASocket | null {
@@ -65,7 +66,7 @@ export class WaSession extends EventEmitter {
     this.stopping = false
     this.emit('status', 'connecting', {})
 
-    const { state, saveCreds } = await usePostgresAuthState(this.numberId)
+    const { state, saveCreds } = await usePostgresAuthState(this.channelId)
     this.saveCreds = saveCreds
 
     const { version } = await fetchLatestBaileysVersion()
@@ -111,7 +112,7 @@ export class WaSession extends EventEmitter {
         const id = u?.key?.id
         if (typeof code !== 'number' || typeof id !== 'string') continue
         const status = STATUS_BY_CODE[code]
-        if (status !== undefined) this.emit('delivery', { waMessageId: id, status })
+        if (status !== undefined) this.emit('delivery', { externalMessageId: id, status })
       }
     })
   }
@@ -179,12 +180,12 @@ export class WaSession extends EventEmitter {
   }
 
   private async handleIncoming(msg: any): Promise<void> {
-    const normalized = normalizeInbound(this.numberId, msg)
+    const normalized = normalizeInbound(this.channelId, msg)
     if (normalized === null) return
 
     const content = extractContent(msg.message)
     if (content.mediaKind !== undefined) {
-      const media = await this.downloadMedia(msg, normalized.waMessageId, content)
+      const media = await this.downloadMedia(msg, normalized.externalMessageId, content)
       if (media !== null) normalized.media = media
     }
 
@@ -193,7 +194,7 @@ export class WaSession extends EventEmitter {
 
   private async downloadMedia(
     msg: any,
-    waMessageId: string,
+    externalMessageId: string,
     content: { mediaMime?: string; mediaName?: string },
   ): Promise<MediaPayload | null> {
     try {
@@ -207,14 +208,14 @@ export class WaSession extends EventEmitter {
         },
       )
       return await saveMedia(
-        this.numberId,
-        waMessageId,
+        this.channelId,
+        externalMessageId,
         buffer,
         content.mediaMime ?? 'application/octet-stream',
         content.mediaName,
       )
     } catch (err) {
-      this.logger.error({ err, waMessageId }, 'не удалось скачать вложение')
+      this.logger.error({ err, externalMessageId }, 'не удалось скачать вложение')
       return null
     }
   }
@@ -226,21 +227,21 @@ export class WaSession extends EventEmitter {
 
     const content = this.buildContent(out)
     const options: Record<string, unknown> = {}
-    if (out.quotedWaMessageId !== undefined) {
+    if (out.quotedExternalMessageId !== undefined) {
       options['quoted'] = {
-        key: { remoteJid: out.chatJid, id: out.quotedWaMessageId, fromMe: false },
+        key: { remoteJid: out.externalChatId, id: out.quotedExternalMessageId, fromMe: false },
         message: { conversation: '' },
       }
     }
 
     // Печатающий статус перед отправкой — выглядит естественнее.
     try {
-      await sock.sendPresenceUpdate('composing', out.chatJid)
+      await sock.sendPresenceUpdate('composing', out.externalChatId)
     } catch {
       /* презенс не критичен */
     }
 
-    const sent = await sock.sendMessage(out.chatJid, content as any, options as any)
+    const sent = await sock.sendMessage(out.externalChatId, content as any, options as any)
     const id: string = (sent as any)?.key?.id ?? ''
     if (id === '') throw new Error('WhatsApp не вернул id отправленного сообщения')
     return id
@@ -274,6 +275,29 @@ export class WaSession extends EventEmitter {
         return { text: out.body }
     }
   }
+
+  /** Аватар контакта. Может отсутствовать или быть закрыт настройками. */
+  async fetchAvatar(externalChatId: string): Promise<string | null> {
+    const sock = this.sock as any
+    if (sock == null) return null
+    try {
+      return ((await sock.profilePictureUrl(externalChatId, 'image')) as string | undefined) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Отвязывает номер в WhatsApp — после этого нужен новый QR. */
+  async disconnect(): Promise<void> {
+    await this.logout()
+  }
+
+  isReady(): boolean {
+    return this.sock !== null
+  }
+
+  readonly kind = 'whatsapp' as const
+  readonly capabilities = CAPABILITIES.whatsapp
 
   async logout(): Promise<void> {
     this.stopping = true

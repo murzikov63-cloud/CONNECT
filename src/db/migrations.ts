@@ -104,4 +104,38 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    name: '002_multichannel',
+    sql: `
+      -- Платформа не про «номера WhatsApp», а про подключённые каналы:
+      -- WhatsApp, Телеграм, MAX и что появится дальше. Убираем из основы
+      -- слова, привязанные к одному мессенджеру.
+      alter table wa_numbers rename to channels;
+      alter table channels rename column jid to external_id;
+      alter table channels add column if not exists kind text not null default 'whatsapp';
+
+      alter table wa_auth_state rename to channel_auth_state;
+      alter table channel_auth_state rename column number_id to channel_id;
+
+      alter table chats rename column number_id to channel_id;
+      alter table chats rename column chat_jid to external_chat_id;
+
+      alter table messages rename column number_id to channel_id;
+      alter table messages rename column wa_message_id to external_message_id;
+      alter table messages rename column quoted_wa_message_id to quoted_external_message_id;
+      drop index if exists messages_wa_uniq;
+      create unique index if not exists messages_external_uniq
+        on messages (channel_id, external_message_id, direction)
+        where external_message_id is not null;
+      alter table outbound_daily rename column number_id to channel_id;
+
+      -- Один и тот же телефон может быть и в WhatsApp, и в Телеграме,
+      -- поэтому телефон уникален в паре с типом канала, а не сам по себе.
+      alter table channels drop constraint if exists wa_numbers_phone_key;
+      create unique index if not exists channels_kind_phone_uniq
+        on channels (kind, phone) where phone is not null;
+
+      create index if not exists channels_kind_idx on channels (kind);
+    `,
+  },
 ]

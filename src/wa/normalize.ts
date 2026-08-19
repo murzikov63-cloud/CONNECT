@@ -45,7 +45,7 @@ export interface ExtractedContent {
   durationSec?: number
   location?: { lat: number; lng: number; name?: string }
   contact?: { name: string; phone: string }
-  quotedWaMessageId?: string
+  quotedExternalMessageId?: string
   /** Ветка сообщения, из которой Baileys будет качать файл. */
   mediaKind?: 'image' | 'video' | 'audio' | 'document' | 'sticker'
 }
@@ -67,7 +67,7 @@ export function extractContent(rawMessage: any): ExtractedContent {
     m.audioMessage?.contextInfo ??
     m.documentMessage?.contextInfo ??
     m.stickerMessage?.contextInfo
-  const quoted = typeof ctx?.stanzaId === 'string' ? { quotedWaMessageId: ctx.stanzaId } : {}
+  const quoted = typeof ctx?.stanzaId === 'string' ? { quotedExternalMessageId: ctx.stanzaId } : {}
 
   if (typeof m.conversation === 'string') {
     return { type: 'text', body: m.conversation, ...quoted }
@@ -182,10 +182,10 @@ export function isIgnorableMessage(rawMessage: any): boolean {
   )
 }
 
-export function normalizeInbound(numberId: string, msg: any): InboundMessage | null {
-  const chatJid: string = msg?.key?.remoteJid ?? ''
-  const waMessageId: string = msg?.key?.id ?? ''
-  if (chatJid === '' || waMessageId === '') return null
+export function normalizeInbound(channelId: string, msg: any): InboundMessage | null {
+  const externalChatId: string = msg?.key?.remoteJid ?? ''
+  const externalMessageId: string = msg?.key?.id ?? ''
+  if (externalChatId === '' || externalMessageId === '') return null
   if (msg.message == null || isIgnorableMessage(msg.message)) return null
 
   const content = extractContent(msg.message)
@@ -193,19 +193,19 @@ export function normalizeInbound(numberId: string, msg: any): InboundMessage | n
   const seconds = typeof tsRaw === 'number' ? tsRaw : Number(tsRaw?.low ?? tsRaw ?? 0)
 
   return {
-    numberId,
-    waMessageId,
-    chatJid,
-    phone: jidToPhone(chatJid),
-    isGroup: isGroupJid(chatJid),
+    channelId,
+    externalMessageId,
+    externalChatId,
+    phone: jidToPhone(externalChatId),
+    isGroup: isGroupJid(externalChatId),
     fromMe: msg?.key?.fromMe === true,
     pushName: msg.pushName ?? '',
     type: content.type,
     body: content.body,
     ...(content.location !== undefined ? { location: content.location } : {}),
     ...(content.contact !== undefined ? { contact: content.contact } : {}),
-    ...(content.quotedWaMessageId !== undefined
-      ? { quotedWaMessageId: content.quotedWaMessageId }
+    ...(content.quotedExternalMessageId !== undefined
+      ? { quotedExternalMessageId: content.quotedExternalMessageId }
       : {}),
     occurredAt: new Date((seconds > 0 ? seconds : Math.floor(Date.now() / 1000)) * 1000),
   }

@@ -6,24 +6,24 @@ import { log } from './logger/index.js'
 import { closeQueues, inboundQueue } from './queue/index.js'
 import { createOutboundWorker } from './queue/outbound.js'
 import { cleanupOldMedia } from './wa/media.js'
-import { SessionManager } from './wa/manager.js'
+import { ChannelManager } from './channels/manager.js'
 
 const logger = log('boot')
 
 async function main(): Promise<void> {
   await migrate()
 
-  const manager = new SessionManager()
+  const manager = new ChannelManager()
   const outboundWorker = createOutboundWorker(manager)
 
   // Сохранённое входящее уходит в очередь; коннектор amoCRM (этап 3)
   // разбирает её и создаёт чат/сделку. Пока канал чатов не выдан —
   // сообщения копятся в очереди и не теряются.
-  manager.on('inbound', (msg: { dbId: string; numberId: string; chat: { id: string } }) => {
+  manager.on('inbound', (msg: { dbId: string; channelId: string; chat: { id: string } }) => {
     void inboundQueue
       .add(
         'to-amo',
-        { dbMessageId: msg.dbId, numberId: msg.numberId, chatId: msg.chat.id },
+        { dbMessageId: msg.dbId, channelId: msg.channelId, chatId: msg.chat.id },
         { jobId: `in:${msg.dbId}` },
       )
       .catch((err: unknown) => logger.error({ err }, 'не удалось поставить входящее в очередь'))

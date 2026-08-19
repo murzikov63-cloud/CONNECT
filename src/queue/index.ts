@@ -14,7 +14,7 @@ export interface OutboundJob extends OutboundMessage {
 
 export interface InboundJob {
   dbMessageId: string
-  numberId: string
+  channelId: string
   chatId: string
 }
 

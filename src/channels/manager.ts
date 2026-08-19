@@ -3,20 +3,22 @@ import { alert } from '../alerts/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import { getSettings, isPersonalNumber } from '../settings.js'
-import type { DeliveryStatus, InboundMessage, NumberStatus } from '../types.js'
-import { clearAuthState } from './auth-state.js'
-import { WaSession } from './session.js'
+import type { DeliveryStatus, InboundMessage, ChannelStatus } from '../types.js'
+import { clearAuthState } from '../wa/auth-state.js'
+import { createDriver } from './registry.js'
+import type { ChannelDriver, ChannelKind } from './types.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const logger = log('manager')
 
-export interface NumberRow {
+export interface ChannelRow {
   id: string
+  kind: ChannelKind
   label: string
   phone: string | null
   jid: string | null
-  status: NumberStatus
+  status: ChannelStatus
   last_connected_at: Date | null
   last_disconnect_reason: string | null
   created_at: Date
@@ -24,8 +26,8 @@ export interface NumberRow {
 
 export interface ChatRow {
   id: string
-  number_id: string
-  chat_jid: string
+  channel_id: string
+  external_chat_id: string
   phone: string | null
   push_name: string | null
   avatar_url: string | null
@@ -43,121 +45,133 @@ export interface ChatRow {
  * Наружу отдаёт событие `inbound` с уже сохранённым сообщением —
  * дальше его подхватывает очередь и коннектор amoCRM.
  */
-export class SessionManager extends EventEmitter {
-  private readonly sessions = new Map<string, WaSession>()
+export class ChannelManager extends EventEmitter {
+  private readonly drivers = new Map<string, ChannelDriver>()
 
   async bootstrap(): Promise<void> {
-    const numbers = await sql<NumberRow[]>`
-      select * from wa_numbers
+    const numbers = await sql<ChannelRow[]>`
+      select * from channels
       where deleted_at is null and status <> 'banned'
       order by created_at
     `
-    logger.info({ count: numbers.length }, 'поднимаю сохранённые номера')
+    logger.info({ count: numbers.length }, 'поднимаю сохранённые каналы')
     for (const row of numbers) {
-      await this.startNumber(row.id, row.label)
+      try {
+        await this.startChannel(row.id, row.kind, row.label)
+      } catch (err) {
+        // Один сломанный канал не должен мешать подняться остальным.
+        logger.error({ err, channelId: row.id, kind: row.kind }, 'канал не поднялся')
+      }
     }
   }
 
-  async listNumbers(): Promise<NumberRow[]> {
-    return sql<NumberRow[]>`
-      select * from wa_numbers where deleted_at is null order by created_at
+  async listNumbers(): Promise<ChannelRow[]> {
+    return sql<ChannelRow[]>`
+      select * from channels where deleted_at is null order by created_at
     `
   }
 
-  async addNumber(label: string): Promise<NumberRow> {
-    const rows = await sql<NumberRow[]>`
-      insert into wa_numbers (label) values (${label}) returning *
+  async addChannel(kind: ChannelKind, label: string): Promise<ChannelRow> {
+    const rows = await sql<ChannelRow[]>`
+      insert into channels (kind, label) values (${kind}, ${label}) returning *
     `
     const row = rows[0]
-    if (row === undefined) throw new Error('не удалось создать номер')
-    await this.startNumber(row.id, row.label)
+    if (row === undefined) throw new Error('не удалось создать канал')
+    await this.startChannel(row.id, row.kind, row.label)
     return row
   }
 
-  async startNumber(id: string, label?: string): Promise<void> {
-    if (this.sessions.has(id)) return
-    const name =
-      label ??
-      (
-        await sql<{ label: string }[]>`select label from wa_numbers where id = ${id}`
-      )[0]?.label ??
-      id
+  async startChannel(id: string, kind?: ChannelKind, label?: string): Promise<void> {
+    if (this.drivers.has(id)) return
 
-    const session = new WaSession(id, name)
-    this.sessions.set(id, session)
-    this.wire(session)
-    await session.start()
+    let resolvedKind = kind
+    let resolvedLabel = label
+    if (resolvedKind === undefined || resolvedLabel === undefined) {
+      const rows = await sql<{ kind: ChannelKind; label: string }[]>`
+        select kind, label from channels where id = ${id}
+      `
+      const row = rows[0]
+      if (row === undefined) throw new Error('канал не найден')
+      resolvedKind ??= row.kind
+      resolvedLabel ??= row.label
+    }
+
+    const driver = createDriver(resolvedKind, id, resolvedLabel)
+    this.drivers.set(id, driver)
+    this.wire(driver, resolvedLabel)
+    await driver.start()
   }
 
-  async restartNumber(id: string): Promise<void> {
-    this.sessions.get(id)?.stop()
-    this.sessions.delete(id)
-    await this.startNumber(id)
+  async restartChannel(id: string): Promise<void> {
+    this.drivers.get(id)?.stop()
+    this.drivers.delete(id)
+    await this.startChannel(id)
   }
 
   /** Отвязывает номер в WhatsApp, чистит ключи и помечает запись удалённой. */
-  async removeNumber(id: string): Promise<void> {
-    const session = this.sessions.get(id)
-    if (session !== undefined) {
-      await session.logout()
-      session.stop()
-      this.sessions.delete(id)
+  async removeChannel(id: string): Promise<void> {
+    const driver = this.drivers.get(id)
+    if (driver !== undefined) {
+      await driver.disconnect()
+      driver.stop()
+      this.drivers.delete(id)
     }
     await clearAuthState(id)
     await sql`
-      update wa_numbers set status = 'new', deleted_at = now(), updated_at = now()
+      update channels set status = 'new', deleted_at = now(), updated_at = now()
       where id = ${id}
     `
   }
 
-  getSession(id: string): WaSession | undefined {
-    return this.sessions.get(id)
+  getDriver(id: string): ChannelDriver | undefined {
+    return this.drivers.get(id)
   }
 
   async getQr(id: string): Promise<string | null> {
     const rows = await sql<{ last_qr: string | null }[]>`
-      select last_qr from wa_numbers where id = ${id}
+      select last_qr from channels where id = ${id}
     `
     return rows[0]?.last_qr ?? null
   }
 
-  private wire(session: WaSession): void {
-    const { numberId, label } = session
+  private wire(driver: ChannelDriver, label: string): void {
+    const channelId = driver.channelId
+    const session = driver
 
-    session.on('status', (status: NumberStatus, extra: { reason?: string; phone?: string }) => {
-      void this.onStatus(numberId, label, status, extra).catch((err: unknown) =>
-        logger.error({ err, numberId }, 'ошибка обработки статуса'),
+    session.on('status', (status: ChannelStatus, extra: { reason?: string; phone?: string }) => {
+      void this.onStatus(channelId, label, status, extra).catch((err: unknown) =>
+        logger.error({ err, channelId }, 'ошибка обработки статуса'),
       )
     })
 
     session.on('qr', (dataUrl: string) => {
       void sql`
-        update wa_numbers set last_qr = ${dataUrl}, last_qr_at = now(), updated_at = now()
-        where id = ${numberId}
-      `.catch((err: unknown) => logger.error({ err, numberId }, 'не удалось сохранить QR'))
+        update channels set last_qr = ${dataUrl}, last_qr_at = now(), updated_at = now()
+        where id = ${channelId}
+      `.catch((err: unknown) => logger.error({ err, channelId }, 'не удалось сохранить QR'))
     })
 
     session.on('inbound', (msg: InboundMessage) => {
       void this.onInbound(msg).catch((err: unknown) =>
-        logger.error({ err, numberId }, 'ошибка сохранения входящего'),
+        logger.error({ err, channelId }, 'ошибка сохранения входящего'),
       )
     })
 
-    session.on('delivery', (u: { waMessageId: string; status: DeliveryStatus }) => {
-      void this.onDelivery(numberId, u).catch((err: unknown) =>
-        logger.error({ err, numberId }, 'ошибка обновления статуса доставки'),
+    session.on('delivery', (u: { externalMessageId: string; status: DeliveryStatus }) => {
+      void this.onDelivery(channelId, u).catch((err: unknown) =>
+        logger.error({ err, channelId }, 'ошибка обновления статуса доставки'),
       )
     })
   }
 
   private async onStatus(
-    numberId: string,
+    channelId: string,
     label: string,
-    status: NumberStatus,
+    status: ChannelStatus,
     extra: { reason?: string; phone?: string },
   ): Promise<void> {
     await sql`
-      update wa_numbers set
+      update channels set
         status = ${status},
         phone = coalesce(${extra.phone ?? null}, phone),
         jid = coalesce(${extra.phone !== undefined ? `${extra.phone}@s.whatsapp.net` : null}, jid),
@@ -165,11 +179,11 @@ export class SessionManager extends EventEmitter {
         last_qr = case when ${status} = 'online' then null else last_qr end,
         last_disconnect_reason = ${extra.reason ?? null},
         updated_at = now()
-      where id = ${numberId}
+      where id = ${channelId}
     `
 
     if (status === 'logged_out') {
-      await clearAuthState(numberId)
+      await clearAuthState(channelId)
       await alert('error', `Номер «${label}» разлогинен`, {
         Причина: extra.reason ?? '—',
         Действие: 'нужно заново отсканировать QR в админке',
@@ -185,7 +199,7 @@ export class SessionManager extends EventEmitter {
         Действие: 'переподключаюсь автоматически',
       })
     } else if (status === 'online') {
-      logger.info({ numberId, phone: extra.phone }, 'номер в сети')
+      logger.info({ channelId, phone: extra.phone }, 'номер в сети')
     }
   }
 
@@ -202,15 +216,15 @@ export class SessionManager extends EventEmitter {
     // гарантируют, что повторная доставка не создаст второе сообщение.
     const inserted = await sql<{ id: string }[]>`
       insert into messages (
-        number_id, chat_id, wa_message_id, direction, type, body,
+        channel_id, chat_id, external_message_id, direction, type, body,
         media_path, media_mime, media_name, media_size,
-        quoted_wa_message_id, sender_name, status, occurred_at
+        quoted_external_message_id, sender_name, status, occurred_at
       ) values (
-        ${msg.numberId}, ${chat.id}, ${msg.waMessageId},
+        ${msg.channelId}, ${chat.id}, ${msg.externalMessageId},
         ${msg.fromMe ? 'out' : 'in'}, ${msg.type}, ${msg.body},
         ${msg.media?.path ?? null}, ${msg.media?.mime ?? null},
         ${msg.media?.name ?? null}, ${msg.media?.size ?? null},
-        ${msg.quotedWaMessageId ?? null}, ${msg.pushName},
+        ${msg.quotedExternalMessageId ?? null}, ${msg.pushName},
         ${msg.fromMe ? 'sent' : 'received'}, ${msg.occurredAt}
       )
       on conflict do nothing
@@ -218,7 +232,7 @@ export class SessionManager extends EventEmitter {
     `
     const row = inserted[0]
     if (row === undefined) {
-      logger.debug({ waMessageId: msg.waMessageId }, 'дубль, пропускаю')
+      logger.debug({ externalMessageId: msg.externalMessageId }, 'дубль, пропускаю')
       return
     }
 
@@ -227,12 +241,12 @@ export class SessionManager extends EventEmitter {
 
   private async upsertChat(msg: InboundMessage): Promise<ChatRow> {
     const rows = await sql<ChatRow[]>`
-      insert into chats (number_id, chat_jid, phone, push_name, is_group, last_message_at)
+      insert into chats (channel_id, external_chat_id, phone, push_name, is_group, last_message_at)
       values (
-        ${msg.numberId}, ${msg.chatJid}, ${msg.phone === '' ? null : msg.phone},
+        ${msg.channelId}, ${msg.externalChatId}, ${msg.phone === '' ? null : msg.phone},
         ${msg.pushName === '' ? null : msg.pushName}, ${msg.isGroup}, ${msg.occurredAt}
       )
-      on conflict (number_id, chat_jid) do update set
+      on conflict (channel_id, external_chat_id) do update set
         push_name = coalesce(nullif(excluded.push_name, ''), chats.push_name),
         last_message_at = greatest(coalesce(chats.last_message_at, excluded.last_message_at), excluded.last_message_at),
         updated_at = now()
@@ -242,30 +256,32 @@ export class SessionManager extends EventEmitter {
     if (chat === undefined) throw new Error('не удалось создать чат')
 
     if (chat.avatar_url == null && !msg.isGroup) {
-      void this.fetchAvatar(msg.numberId, msg.chatJid)
+      void this.fetchAvatar(msg.channelId, msg.externalChatId)
     }
     return chat
   }
 
   /** Аватар подтягиваем в фоне — он не должен задерживать доставку сообщения. */
-  private fetchAvatar(numberId: string, chatJid: string): void {
-    const sock = this.sessions.get(numberId)?.socket as any
-    if (sock == null) return
-    void sock
-      .profilePictureUrl(chatJid, 'image')
-      .then(
-        (url: string | undefined) =>
-          url !== undefined &&
-          sql`update chats set avatar_url = ${url} where number_id = ${numberId} and chat_jid = ${chatJid}`,
-      )
+  private fetchAvatar(channelId: string, externalChatId: string): void {
+    const driver = this.drivers.get(channelId)
+    if (driver?.fetchAvatar === undefined) return
+    void driver
+      .fetchAvatar(externalChatId)
+      .then(async (url) => {
+        if (url === null) return
+        await sql`
+          update chats set avatar_url = ${url}
+          where channel_id = ${channelId} and external_chat_id = ${externalChatId}
+        `
+      })
       .catch(() => {
-        /* у контакта может не быть аватара или закрыты настройки приватности */
+        /* аватара может не быть или он закрыт настройками приватности */
       })
   }
 
   private async onDelivery(
-    numberId: string,
-    u: { waMessageId: string; status: DeliveryStatus },
+    channelId: string,
+    u: { externalMessageId: string; status: DeliveryStatus },
   ): Promise<void> {
     const column =
       u.status === 'delivered' ? 'delivered_at' : u.status === 'read' ? 'read_at' : 'sent_at'
@@ -274,14 +290,14 @@ export class SessionManager extends EventEmitter {
       update messages set
         status = ${u.status},
         ${sql(column)} = coalesce(${sql(column)}, now())
-      where number_id = ${numberId} and wa_message_id = ${u.waMessageId} and direction = 'out'
+      where channel_id = ${channelId} and external_message_id = ${u.externalMessageId} and direction = 'out'
     `
-    this.emit('delivery', { numberId, ...u })
+    this.emit('delivery', { channelId, ...u })
   }
 
   async shutdown(): Promise<void> {
     logger.info('останавливаю сессии')
-    for (const session of this.sessions.values()) session.stop()
-    this.sessions.clear()
+    for (const driver of this.drivers.values()) driver.stop()
+    this.drivers.clear()
   }
 }

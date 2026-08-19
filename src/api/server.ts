@@ -9,8 +9,10 @@ import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import { outboundQueue } from '../queue/index.js'
 import { getSettings, saveSettings } from '../settings.js'
-import type { SessionManager } from '../wa/manager.js'
+import type { ChannelManager } from '../channels/manager.js'
 import { absoluteMediaPath, verifyMediaToken } from '../wa/media.js'
+import { isKnownKind } from '../channels/registry.js'
+import { CAPABILITIES, CHANNEL_TITLES } from '../channels/types.js'
 import { openapi } from './openapi.js'
 import {
   checkPassword,
@@ -39,7 +41,7 @@ const settingsSchema = z
   })
   .partial()
 
-export async function buildServer(manager: SessionManager): Promise<FastifyInstance> {
+export async function buildServer(manager: ChannelManager): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 25 * 1024 * 1024 })
 
   const origins = parseCorsOrigins(config.ADMIN_CORS_ORIGIN)
@@ -71,6 +73,16 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
 
   app.get('/api/openapi.json', async () => openapi)
 
+  /** Какие мессенджеры поддерживает платформа и как каждый подключается. */
+  app.get('/api/channel-kinds', guarded, async () =>
+    Object.entries(CAPABILITIES).map(([kind, caps]) => ({
+      kind,
+      title: CHANNEL_TITLES[kind as keyof typeof CHANNEL_TITLES],
+      available: kind === 'whatsapp',
+      ...caps,
+    })),
+  )
+
   app.post<{ Body: { password?: string } }>('/api/auth/login', async (req, reply) => {
     const ip = req.headers['cf-connecting-ip']?.toString() ?? req.ip
     if (loginBlocked(ip)) {
@@ -90,22 +102,24 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
   app.get('/api/numbers', guarded, async () => {
     const numbers = await manager.listNumbers()
     const stats = await sql<
-      { number_id: string; incoming: string; outgoing: string; failed: string }[]
+      { channel_id: string; incoming: string; outgoing: string; failed: string }[]
     >`
-      select number_id,
+      select channel_id,
              count(*) filter (where direction = 'in')                as incoming,
              count(*) filter (where direction = 'out')               as outgoing,
              count(*) filter (where status = 'failed')               as failed
       from messages
       where created_at > now() - interval '24 hours'
-      group by number_id
+      group by channel_id
     `
-    const byId = new Map(stats.map((s) => [s.number_id, s]))
+    const byId = new Map(stats.map((s) => [s.channel_id, s]))
 
     return numbers.map((n) => {
       const s = byId.get(n.id)
       return {
         id: n.id,
+        kind: n.kind,
+        kindTitle: CHANNEL_TITLES[n.kind] ?? n.kind,
         label: n.label,
         phone: n.phone,
         status: n.status,
@@ -124,11 +138,22 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
     })
   })
 
-  app.post<{ Body: { label?: string } }>('/api/numbers', guarded, async (req, reply) => {
+  // Адрес пока прежний, хотя канал уже не обязательно телефонный номер:
+  // менять его вместе с админкой будем одним заходом, когда добавим Телеграм.
+  app.post<{ Body: { label?: string; kind?: string } }>(
+    '/api/numbers',
+    guarded,
+    async (req, reply) => {
     const label = (req.body?.label ?? '').trim()
     if (label === '') return reply.code(400).send({ error: 'нужно поле label' })
-    return manager.addNumber(label)
-  })
+    const kindRaw = req.body?.kind ?? 'whatsapp'
+    if (!isKnownKind(kindRaw)) {
+      return reply.code(400).send({ error: `неизвестный тип канала: ${kindRaw}` })
+    }
+    const kind = kindRaw
+    return manager.addChannel(kind, label)
+    },
+  )
 
   app.get<{ Params: { id: string } }>('/api/numbers/:id/qr', guarded, async (req, reply) => {
     const qr = await manager.getQr(req.params.id)
@@ -139,12 +164,12 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
   })
 
   app.post<{ Params: { id: string } }>('/api/numbers/:id/restart', guarded, async (req) => {
-    await manager.restartNumber(req.params.id)
+    await manager.restartChannel(req.params.id)
     return { ok: true }
   })
 
   app.delete<{ Params: { id: string } }>('/api/numbers/:id', guarded, async (req) => {
-    await manager.removeNumber(req.params.id)
+    await manager.removeChannel(req.params.id)
     return { ok: true }
   })
 
@@ -203,9 +228,9 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
              c.phone as chat_phone, c.push_name as chat_name,
              case when m.type = 'text' then left(m.body, 200) else null end as preview
       from messages m
-      join wa_numbers n on n.id = m.number_id
+      join channels n on n.id = m.channel_id
       left join chats c on c.id = m.chat_id
-      where (${number ?? null}::uuid is null or m.number_id = ${number ?? null}::uuid)
+      where (${number ?? null}::uuid is null or m.channel_id = ${number ?? null}::uuid)
         and (${status ?? null}::text is null or m.status = ${status ?? null})
         and (${direction ?? null}::text is null or m.direction = ${direction ?? null})
         and (${q ?? null}::text is null
@@ -222,8 +247,8 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
     const rows = await sql<
       {
         id: string
-        number_id: string
-        chat_jid: string
+        channel_id: string
+        external_chat_id: string
         type: string
         body: string | null
         media_path: string | null
@@ -233,7 +258,7 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
         status: string
       }[]
     >`
-      select m.id::text, m.number_id::text, c.chat_jid, m.type, m.body,
+      select m.id::text, m.channel_id::text, c.external_chat_id, m.type, m.body,
              m.media_path, m.media_mime, m.media_name, m.amo_message_id, m.status
       from messages m join chats c on c.id = m.chat_id
       where m.id = ${req.params.id} and m.direction = 'out'
@@ -247,8 +272,8 @@ export async function buildServer(manager: SessionManager): Promise<FastifyInsta
     await sql`update messages set status = 'queued', error = null where id = ${msg.id}`
     await outboundQueue.add('retry', {
       dbMessageId: msg.id,
-      numberId: msg.number_id,
-      chatJid: msg.chat_jid,
+      channelId: msg.channel_id,
+      externalChatId: msg.external_chat_id,
       type: msg.type as never,
       body: msg.body ?? '',
       ...(msg.media_path !== null ? { mediaPath: msg.media_path } : {}),

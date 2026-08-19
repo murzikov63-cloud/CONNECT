@@ -12,7 +12,7 @@ export type MessageType =
   | 'contact'
   | 'unsupported'
 
-export type NumberStatus =
+export type ChannelStatus =
   | 'new'
   | 'connecting'
   | 'qr'
@@ -31,9 +31,9 @@ export interface MediaPayload {
 }
 
 export interface InboundMessage {
-  numberId: string
-  waMessageId: string
-  chatJid: string
+  channelId: string
+  externalMessageId: string
+  externalChatId: string
   /** Телефон в формате 79991234567 (без +), пусто для групп. */
   phone: string
   isGroup: boolean
@@ -45,20 +45,20 @@ export interface InboundMessage {
   media?: MediaPayload
   location?: { lat: number; lng: number; name?: string }
   contact?: { name: string; phone: string }
-  quotedWaMessageId?: string
+  quotedExternalMessageId?: string
   occurredAt: Date
 }
 
 export interface OutboundMessage {
-  numberId: string
-  chatJid: string
+  channelId: string
+  externalChatId: string
   type: MessageType
   body: string
   /** Локальный путь к уже скачанному файлу либо http(s)-ссылка из amoCRM. */
   mediaPath?: string
   mediaMime?: string
   mediaName?: string
-  quotedWaMessageId?: string
+  quotedExternalMessageId?: string
   /** ID сообщения в amoCRM — по нему отдаём статус доставки обратно. */
   amoMessageId?: string
 }
@@ -66,8 +66,8 @@ export interface OutboundMessage {
 export type DeliveryStatus = 'sent' | 'delivered' | 'read' | 'failed'
 
 export interface DeliveryUpdate {
-  numberId: string
-  waMessageId: string
+  channelId: string
+  externalMessageId: string
   status: DeliveryStatus
   error?: string
   at: Date

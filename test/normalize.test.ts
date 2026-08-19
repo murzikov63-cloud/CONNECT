@@ -55,7 +55,7 @@ describe('extractContent', () => {
     const c = extractContent({
       extendedTextMessage: { text: 'ответ', contextInfo: { stanzaId: 'ABC123' } },
     })
-    expect(c).toMatchObject({ type: 'text', body: 'ответ', quotedWaMessageId: 'ABC123' })
+    expect(c).toMatchObject({ type: 'text', body: 'ответ', quotedExternalMessageId: 'ABC123' })
   })
 
   it('фото с подписью', () => {
@@ -126,8 +126,8 @@ describe('normalizeInbound', () => {
     const msg = normalizeInbound(NUMBER_ID, base)
     expect(msg).not.toBeNull()
     expect(msg).toMatchObject({
-      numberId: NUMBER_ID,
-      waMessageId: 'WAMSG1',
+      channelId: NUMBER_ID,
+      externalMessageId: 'WAMSG1',
       phone: '79991234567',
       isGroup: false,
       fromMe: false,

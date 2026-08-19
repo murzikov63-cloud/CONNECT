@@ -33,6 +33,8 @@ export const openapi = {
         type: 'object',
         properties: {
           id: { type: 'string', format: 'uuid' },
+          kind: { type: 'string', enum: ['whatsapp', 'telegram', 'max'] },
+          kindTitle: { type: 'string', example: 'WhatsApp' },
           label: { type: 'string', example: 'Отдел продаж 1' },
           phone: { type: 'string', nullable: true, example: '79991234567' },
           status: {
@@ -171,12 +173,28 @@ export const openapi = {
               schema: {
                 type: 'object',
                 required: ['label'],
-                properties: { label: { type: 'string', example: 'Отдел продаж 2' } },
+                properties: {
+                  label: { type: 'string', example: 'Отдел продаж 2' },
+                  kind: {
+                    type: 'string',
+                    enum: ['whatsapp', 'telegram', 'max'],
+                    default: 'whatsapp',
+                  },
+                },
               },
             },
           },
         },
         responses: { '200': { description: 'Созданный номер' } },
+      },
+    },
+    '/api/channel-kinds': {
+      get: {
+        summary: 'Поддерживаемые мессенджеры и их возможности',
+        description:
+          'По этому списку админка решает, что показывать при подключении: ' +
+          'QR-код, поле для токена или ничего.',
+        responses: { '200': { description: 'Список' } },
       },
     },
     '/api/numbers/{id}/qr': {

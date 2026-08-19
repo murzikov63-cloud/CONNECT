@@ -50,17 +50,17 @@ export function verifyMediaToken(relPath: string, token: string): boolean {
 }
 
 export async function saveMedia(
-  numberId: string,
-  waMessageId: string,
+  channelId: string,
+  externalMessageId: string,
   buffer: Buffer,
   mime: string,
   originalName?: string,
 ): Promise<MediaPayload> {
   const now = new Date()
   const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
-  const safeId = waMessageId.replace(/[^A-Za-z0-9_-]/g, '')
+  const safeId = externalMessageId.replace(/[^A-Za-z0-9_-]/g, '')
   const ext = extForMime(mime)
-  const relPath = join(numberId, month, `${safeId}.${ext}`)
+  const relPath = join(channelId, month, `${safeId}.${ext}`)
   const absPath = join(config.MEDIA_DIR, relPath)
 
   await mkdir(dirname(absPath), { recursive: true })
