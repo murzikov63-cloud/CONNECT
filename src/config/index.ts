@@ -34,6 +34,9 @@ const schema = z.object({
   AMO_CHAT_BASE_URL: z.string().default('https://amojo.amocrm.ru'),
 
   TG_BOT_TOKEN: z.string().default(''),
+  // Ключи приложения с my.telegram.org — общие для всех подключаемых номеров.
+  TG_API_ID: z.coerce.number().int().default(0),
+  TG_API_HASH: z.string().default(''),
   TG_ALERT_CHAT_ID: z.string().default(''),
 
   ADMIN_API_KEY: z.string().min(8),

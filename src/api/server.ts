@@ -78,7 +78,7 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     Object.entries(CAPABILITIES).map(([kind, caps]) => ({
       kind,
       title: CHANNEL_TITLES[kind as keyof typeof CHANNEL_TITLES],
-      available: kind === 'whatsapp',
+      available: kind === 'whatsapp' || kind === 'telegram',
       ...caps,
     })),
   )

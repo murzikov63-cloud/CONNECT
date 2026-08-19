@@ -15,9 +15,12 @@ describe('типы каналов', () => {
     expect(CAPABILITIES.max.banRisk).toBe(false)
   })
 
-  it('первым написать может только WhatsApp', () => {
+  it('писать первым нельзя только там, где подключаемся ботом', () => {
+    // WhatsApp и Телеграм подключаются как обычный клиент — ограничений нет.
     expect(CAPABILITIES.whatsapp.canInitiate).toBe(true)
-    expect(CAPABILITIES.telegram.canInitiate).toBe(false)
+    expect(CAPABILITIES.telegram.canInitiate).toBe(true)
+    // MAX подключается ботом, а бот не может написать первым.
+    expect(CAPABILITIES.max.canInitiate).toBe(false)
   })
 
   it('чужие названия не считаются известными', () => {
@@ -35,8 +38,13 @@ describe('подбор драйвера', () => {
     expect(driver.channelId).toBe('id-1')
   })
 
+  it('для Телеграма драйвер есть', () => {
+    const driver = createDriver('telegram', 'id-2', 'Тест')
+    expect(driver.kind).toBe('telegram')
+    expect(driver.channelId).toBe('id-2')
+  })
+
   it('для неготовых каналов ошибка понятна человеку', () => {
-    expect(() => createDriver('telegram', 'id-2', 'Тест')).toThrow(/Телеграм/)
     expect(() => createDriver('max', 'id-3', 'Тест')).toThrow(/MAX/)
   })
 })

@@ -1,3 +1,4 @@
+import { TelegramDriver } from '../telegram/driver.js'
 import { WaSession } from '../wa/session.js'
 import { CAPABILITIES, CHANNEL_TITLES } from './types.js'
 import type { ChannelDriver, ChannelKind } from './types.js'
@@ -12,6 +13,7 @@ export function createDriver(kind: ChannelKind, channelId: string, label: string
     case 'whatsapp':
       return new WaSession(channelId, label) as unknown as ChannelDriver
     case 'telegram':
+      return new TelegramDriver(channelId, label) as unknown as ChannelDriver
     case 'max':
       throw new Error(`Канал «${CHANNEL_TITLES[kind]}» ещё не подключён к платформе`)
     default: {

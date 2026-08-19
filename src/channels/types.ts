@@ -73,14 +73,15 @@ export const CAPABILITIES: Record<ChannelKind, ChannelCapabilities> = {
   },
   telegram: {
     connect: 'token',
-    // Телеграм не даёт написать первым тому, кто нам не писал.
-    canInitiate: false,
+    // Подключаемся как обычный клиент, поэтому ограничений на первое
+    // сообщение нет — в отличие от официальных ботов.
+    canInitiate: true,
     banRisk: false,
     media: true,
     voice: true,
     quotes: true,
-    // Телеграм не сообщает о доставке и прочтении через ботов.
-    deliveryStatus: false,
+    // О прочтении Телеграм сообщает, о доставке отдельного события нет.
+    deliveryStatus: true,
   },
   max: {
     connect: 'token',
