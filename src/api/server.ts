@@ -13,6 +13,7 @@ import type { ChannelManager } from '../channels/manager.js'
 import { absoluteMediaPath, verifyMediaToken } from '../wa/media.js'
 import { isKnownKind } from '../channels/registry.js'
 import { CAPABILITIES, CHANNEL_TITLES } from '../channels/types.js'
+import { parseOutgoing, resolveChat, verifyWebhookSignature } from '../amo/webhook.js'
 import { openapi } from './openapi.js'
 import {
   checkPassword,
@@ -43,6 +44,22 @@ const settingsSchema = z
 
 export async function buildServer(manager: ChannelManager): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 25 * 1024 * 1024 })
+
+  // Подпись вебхука amoCRM считается от СЫРОГО тела, поэтому сохраняем его
+  // до разбора: пересобранный JSON даст другую строку и другую подпись.
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (req, body, done) => {
+      const holder = req as unknown as { rawBody: string }
+      holder.rawBody = body as string
+      try {
+        done(null, body === '' ? {} : JSON.parse(body as string))
+      } catch (err) {
+        done(err as Error, undefined)
+      }
+    },
+  )
 
   const origins = parseCorsOrigins(config.ADMIN_CORS_ORIGIN)
   await app.register(cors, {
@@ -298,6 +315,70 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       })
     }
     return saveSettings(parsed.data)
+  })
+
+  // --- ответы менеджеров из amoCRM --------------------------------------
+
+  /**
+   * Сюда amoCRM стучится, когда менеджер пишет в чате карточки.
+   * Отвечаем быстро: тяжёлое делает очередь.
+   */
+  app.post<{ Params: { scopeId: string } }>('/amojo/:scopeId', async (req, reply) => {
+    if (req.params.scopeId !== config.AMO_CHAT_SCOPE_ID) {
+      return reply.code(404).send({ error: 'неизвестный канал' })
+    }
+
+    const raw = (req as unknown as { rawBody?: string }).rawBody ?? ''
+    const signature = String(req.headers['x-signature'] ?? '')
+    if (!verifyWebhookSignature(raw, signature)) {
+      logger.warn('вебхук с неверной подписью отклонён')
+      return reply.code(401).send({ error: 'неверная подпись' })
+    }
+
+    const parsed = parseOutgoing(req.body)
+    if (parsed === null) {
+      // Форма вебхука могла измениться — записываем состав полей без содержимого.
+      logger.warn(
+        { keys: Object.keys((req.body ?? {}) as Record<string, unknown>) },
+        'не смог разобрать вебхук amoCRM',
+      )
+      return reply.code(200).send({ ok: true })
+    }
+
+    const chat = await resolveChat(parsed)
+    if (chat === null) return reply.code(200).send({ ok: true })
+
+    const inserted = await sql<{ id: string }[]>`
+      insert into messages (
+        channel_id, chat_id, amo_message_id, direction, type, body,
+        media_path, media_name, media_size, status, occurred_at
+      ) values (
+        ${chat.channel_id}, ${chat.chat_id}, ${parsed.amoMessageId}, 'out',
+        ${parsed.type}, ${parsed.text},
+        ${parsed.media ?? null}, ${parsed.fileName ?? null}, ${parsed.fileSize ?? null},
+        'queued', now()
+      )
+      on conflict do nothing
+      returning id::text as id
+    `
+    const row = inserted[0]
+    if (row === undefined) {
+      // Повтор того же вебхука — amoCRM иногда шлёт дважды.
+      return reply.code(200).send({ ok: true })
+    }
+
+    await outboundQueue.add('from-amo', {
+      dbMessageId: row.id,
+      channelId: chat.channel_id,
+      externalChatId: chat.external_chat_id,
+      type: parsed.type,
+      body: parsed.text,
+      ...(parsed.media !== undefined ? { mediaPath: parsed.media } : {}),
+      ...(parsed.fileName !== undefined ? { mediaName: parsed.fileName } : {}),
+      ...(parsed.amoMessageId !== '' ? { amoMessageId: parsed.amoMessageId } : {}),
+    })
+
+    return reply.code(200).send({ ok: true })
   })
 
   // --- вложения ---------------------------------------------------------

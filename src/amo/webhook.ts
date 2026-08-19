@@ -1,0 +1,122 @@
+import { createHmac, timingSafeEqual } from 'node:crypto'
+import { config } from '../config/index.js'
+import { sql } from '../db/index.js'
+import { log } from '../logger/index.js'
+import type { MessageType } from '../types.js'
+
+const logger = log('amo-webhook')
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** Подпись вебхука: HMAC-SHA1 от сырого тела на секрете канала. */
+export function verifyWebhookSignature(rawBody: string, signature: string): boolean {
+  if (config.AMO_CHAT_SECRET_KEY === '' || signature === '') return false
+  const expected = createHmac('sha1', config.AMO_CHAT_SECRET_KEY).update(rawBody).digest('hex')
+  const a = Buffer.from(expected)
+  const b = Buffer.from(signature.toLowerCase())
+  if (a.length !== b.length) return false
+  return timingSafeEqual(a, b)
+}
+
+/** Типы amoCRM -> наши. */
+export function fromAmoType(type: string | undefined): MessageType {
+  switch (type) {
+    case 'picture':
+      return 'image'
+    case 'file':
+      return 'document'
+    case 'video':
+      return 'video'
+    case 'voice':
+      return 'voice'
+    case 'audio':
+      return 'audio'
+    case 'sticker':
+      return 'sticker'
+    case 'location':
+      return 'location'
+    case 'contact':
+      return 'contact'
+    default:
+      return 'text'
+  }
+}
+
+export interface OutgoingFromAmo {
+  /** Наш идентификатор переписки, который мы сами и отдавали amoCRM. */
+  conversationClientId: string
+  /** Идентификатор чата на стороне amoCRM. */
+  amoChatId: string
+  amoMessageId: string
+  type: MessageType
+  text: string
+  media?: string
+  fileName?: string
+  fileSize?: number
+}
+
+/**
+ * Разбор вебхука.
+ *
+ * Формат исходящих в документации amoCRM описан скупо, а на практике поля
+ * приходят вложенными. Поэтому проверяем несколько вариантов расположения:
+ * лучше принять сообщение, чем потерять ответ менеджера клиенту.
+ */
+export function parseOutgoing(body: any): OutgoingFromAmo | null {
+  const m = body?.message ?? body
+  const conversation = m?.conversation ?? {}
+  const inner = m?.message ?? m
+
+  const conversationClientId: string =
+    conversation.client_id ?? conversation.conversation_id ?? m?.conversation_id ?? ''
+  const amoChatId: string = conversation.id ?? m?.chat_id ?? ''
+  const amoMessageId: string = inner?.id ?? m?.msgid ?? ''
+
+  if (conversationClientId === '' && amoChatId === '') return null
+
+  const result: OutgoingFromAmo = {
+    conversationClientId,
+    amoChatId,
+    amoMessageId,
+    type: fromAmoType(inner?.type),
+    text: inner?.text ?? '',
+  }
+  if (typeof inner?.media === 'string' && inner.media !== '') result.media = inner.media
+  if (typeof inner?.file_name === 'string') result.fileName = inner.file_name
+  if (typeof inner?.file_size === 'number') result.fileSize = inner.file_size
+  return result
+}
+
+export interface ResolvedChat {
+  chat_id: string
+  channel_id: string
+  external_chat_id: string
+}
+
+/** Находит нашу переписку по тому, что прислал amoCRM. */
+export async function resolveChat(parsed: OutgoingFromAmo): Promise<ResolvedChat | null> {
+  // Сначала по идентификатору чата amoCRM — он записан у нас при создании.
+  if (parsed.amoChatId !== '') {
+    const rows = await sql<ResolvedChat[]>`
+      select id::text as chat_id, channel_id::text as channel_id, external_chat_id
+      from chats where amo_chat_id = ${parsed.amoChatId}
+    `
+    if (rows[0] !== undefined) return rows[0]
+  }
+
+  // Запасной путь: наш собственный идентификатор вида «telegram-<id чата>».
+  const match = /^[a-z]+-(\d+)$/.exec(parsed.conversationClientId)
+  if (match !== null) {
+    const rows = await sql<ResolvedChat[]>`
+      select id::text as chat_id, channel_id::text as channel_id, external_chat_id
+      from chats where id = ${match[1]!}
+    `
+    if (rows[0] !== undefined) return rows[0]
+  }
+
+  logger.warn(
+    { amoChatId: parsed.amoChatId, conversationClientId: parsed.conversationClientId },
+    'не нашёл переписку, к которой относится ответ менеджера',
+  )
+  return null
+}

@@ -4,6 +4,7 @@ import { config } from './config/index.js'
 import { closeDb, migrate } from './db/index.js'
 import { log } from './logger/index.js'
 import { closeQueues, inboundQueue } from './queue/index.js'
+import { createInboundWorker } from './amo/inbound.js'
 import { createOutboundWorker } from './queue/outbound.js'
 import { cleanupOldMedia } from './wa/media.js'
 import { ChannelManager } from './channels/manager.js'
@@ -15,6 +16,7 @@ async function main(): Promise<void> {
 
   const manager = new ChannelManager()
   const outboundWorker = createOutboundWorker(manager)
+  const inboundWorker = createInboundWorker()
 
   // Сохранённое входящее уходит в очередь; коннектор amoCRM (этап 3)
   // разбирает её и создаёт чат/сделку. Пока канал чатов не выдан —
@@ -54,6 +56,7 @@ async function main(): Promise<void> {
     clearInterval(mediaCleanup)
     await app.close()
     await outboundWorker.close()
+    await inboundWorker.close()
     await manager.shutdown()
     await closeQueues()
     await closeDb()
