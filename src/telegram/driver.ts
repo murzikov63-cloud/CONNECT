@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import QRCode from 'qrcode'
 import { config } from '../config/index.js'
 import { log } from '../logger/index.js'
 import { CAPABILITIES } from '../channels/types.js'
@@ -25,12 +26,19 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
 
   private client: TgClient | null = null
   private ready = false
+  private stopping = false
+  /**
+   * Облачный пароль держим только в памяти на время входа: это пароль
+   * от аккаунта целиком, в базе ему делать нечего.
+   */
+  private cloudPassword: string | undefined
   private readonly logger
 
-  constructor(channelId: string, label: string) {
+  constructor(channelId: string, label: string, options?: { password?: string }) {
     super()
     this.channelId = channelId
     this.label = label
+    this.cloudPassword = options?.password
     this.logger = log('telegram').child({ channelId, label })
   }
 
@@ -39,11 +47,12 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
       throw new Error('Не заданы TG_API_ID и TG_API_HASH — см. docs/anatoly/05-telegram-connect.md')
     }
 
+    this.stopping = false
     this.emit('status', 'connecting', {})
     const saved = await loadSession(this.channelId)
     if (saved === '') {
-      // Входа ещё не было: канал создан, но код не вводили.
-      this.emit('status', 'logged_out', { reason: 'вход в Телеграм не выполнен' })
+      // Входа ещё не было — показываем QR, как в WhatsApp.
+      await this.loginByQr()
       return
     }
 
@@ -61,7 +70,8 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
 
     if (!(await client.isUserAuthorized())) {
       this.ready = false
-      this.emit('status', 'logged_out', { reason: 'сессия больше не действует' })
+      this.logger.warn('сессия больше не действует, показываю новый QR')
+      await this.loginByQr()
       return
     }
 
@@ -77,6 +87,72 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     this.ready = true
     this.logger.info({ phone }, 'аккаунт Телеграма в сети')
     this.emit('status', 'online', { phone })
+  }
+
+  /**
+   * Вход по QR — тот же способ, которым подключается Telegram Desktop.
+   * Телеграм выдаёт короткоживущий ключ, мы рисуем из него картинку;
+   * пользователь сканирует её в приложении на телефоне.
+   * Библиотека сама обновляет ключ каждые несколько десятков секунд
+   * и вызывает наш обработчик заново.
+   */
+  private async loginByQr(): Promise<void> {
+    const client = new TelegramClient(
+      new StringSession(''),
+      config.TG_API_ID,
+      config.TG_API_HASH,
+      { connectionRetries: 5 },
+    )
+    client.setLogLevel?.('error')
+    await client.connect()
+    this.client = client
+
+    const password = this.cloudPassword
+    try {
+      await client.signInUserWithQrCode(
+        { apiId: config.TG_API_ID, apiHash: config.TG_API_HASH },
+        {
+          qrCode: async (code: { token: Buffer }) => {
+            const token = code.token.toString('base64url')
+            const dataUrl = await QRCode.toDataURL(`tg://login?token=${token}`, {
+              margin: 1,
+              width: 320,
+            })
+            this.emit('status', 'qr', {})
+            this.emit('qr', dataUrl)
+          },
+          password: async () => {
+            if (password === undefined) {
+              throw new Error('нужен облачный пароль')
+            }
+            return password
+          },
+          onError: (err: Error) => {
+            this.logger.error({ err }, 'ошибка входа по QR')
+            return false
+          },
+        },
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.emit('status', 'logged_out', {
+        reason: message.includes('облачный пароль')
+          ? 'на аккаунте включён облачный пароль — укажите его при добавлении канала'
+          : `вход не удался: ${message}`,
+      })
+      return
+    }
+
+    if (this.stopping) return
+
+    // Пароль больше не нужен: дальше вход держится на сохранённой сессии.
+    this.cloudPassword = undefined
+    await saveSession(this.channelId, client.session.save() as string)
+    this.logger.info('вход по QR выполнен, поднимаю канал')
+
+    // Перезапускаемся уже с сохранённой сессией — так же, как при обычном старте.
+    this.client = null
+    await this.start()
   }
 
   private async handleIncoming(event: any): Promise<void> {
@@ -184,6 +260,7 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
   }
 
   stop(): void {
+    this.stopping = true
     this.ready = false
     try {
       void this.client?.disconnect()

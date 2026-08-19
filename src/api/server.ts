@@ -140,7 +140,7 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
 
   // Адрес пока прежний, хотя канал уже не обязательно телефонный номер:
   // менять его вместе с админкой будем одним заходом, когда добавим Телеграм.
-  app.post<{ Body: { label?: string; kind?: string } }>(
+  app.post<{ Body: { label?: string; kind?: string; password?: string } }>(
     '/api/numbers',
     guarded,
     async (req, reply) => {
@@ -151,7 +151,8 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       return reply.code(400).send({ error: `неизвестный тип канала: ${kindRaw}` })
     }
     const kind = kindRaw
-    return manager.addChannel(kind, label)
+    const password = req.body?.password
+    return manager.addChannel(kind, label, password === undefined ? undefined : { password })
     },
   )
 

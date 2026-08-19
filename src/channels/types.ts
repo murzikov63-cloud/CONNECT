@@ -72,7 +72,8 @@ export const CAPABILITIES: Record<ChannelKind, ChannelCapabilities> = {
     deliveryStatus: true,
   },
   telegram: {
-    connect: 'token',
+    // Как в Telegram Desktop: код показывается у нас, сканируется телефоном.
+    connect: 'qr',
     // Подключаемся как обычный клиент, поэтому ограничений на первое
     // сообщение нет — в отличие от официальных ботов.
     canInitiate: true,

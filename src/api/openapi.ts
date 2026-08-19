@@ -180,6 +180,13 @@ export const openapi = {
                     enum: ['whatsapp', 'telegram', 'max'],
                     default: 'whatsapp',
                   },
+                  password: {
+                    type: 'string',
+                    description:
+                      'Только для Телеграма и только если на аккаунте включён ' +
+                      'облачный пароль. Нигде не сохраняется — используется ' +
+                      'один раз при входе.',
+                  },
                 },
               },
             },
@@ -200,6 +207,9 @@ export const openapi = {
     '/api/numbers/{id}/qr': {
       get: {
         summary: 'Текущий QR для входа',
+        description:
+          'Работает одинаково для WhatsApp и Телеграма. Опрашивать раз в 2 секунды: ' +
+          'код обновляется сам, а после успешного входа статус канала станет online.',
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
         ],

@@ -15,6 +15,11 @@ describe('типы каналов', () => {
     expect(CAPABILITIES.max.banRisk).toBe(false)
   })
 
+  it('WhatsApp и Телеграм подключаются одинаково — по QR', () => {
+    expect(CAPABILITIES.whatsapp.connect).toBe('qr')
+    expect(CAPABILITIES.telegram.connect).toBe('qr')
+  })
+
   it('писать первым нельзя только там, где подключаемся ботом', () => {
     // WhatsApp и Телеграм подключаются как обычный клиент — ограничений нет.
     expect(CAPABILITIES.whatsapp.canInitiate).toBe(true)

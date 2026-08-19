@@ -8,12 +8,22 @@ import type { ChannelDriver, ChannelKind } from './types.js'
  * обслуживается. Добавление нового канала — это новый драйвер и одна
  * строка в этой таблице.
  */
-export function createDriver(kind: ChannelKind, channelId: string, label: string): ChannelDriver {
+export interface DriverOptions {
+  /** Облачный пароль Телеграма, если он включён. Только на время входа. */
+  password?: string
+}
+
+export function createDriver(
+  kind: ChannelKind,
+  channelId: string,
+  label: string,
+  options?: DriverOptions,
+): ChannelDriver {
   switch (kind) {
     case 'whatsapp':
       return new WaSession(channelId, label) as unknown as ChannelDriver
     case 'telegram':
-      return new TelegramDriver(channelId, label) as unknown as ChannelDriver
+      return new TelegramDriver(channelId, label, options) as unknown as ChannelDriver
     case 'max':
       throw new Error(`Канал «${CHANNEL_TITLES[kind]}» ещё не подключён к платформе`)
     default: {

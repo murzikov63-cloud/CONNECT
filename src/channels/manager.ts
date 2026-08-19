@@ -6,6 +6,7 @@ import { getSettings, isPersonalNumber } from '../settings.js'
 import type { DeliveryStatus, InboundMessage, ChannelStatus } from '../types.js'
 import { clearAuthState } from '../wa/auth-state.js'
 import { createDriver } from './registry.js'
+import type { DriverOptions } from './registry.js'
 import type { ChannelDriver, ChannelKind } from './types.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -71,17 +72,26 @@ export class ChannelManager extends EventEmitter {
     `
   }
 
-  async addChannel(kind: ChannelKind, label: string): Promise<ChannelRow> {
+  async addChannel(
+    kind: ChannelKind,
+    label: string,
+    options?: DriverOptions,
+  ): Promise<ChannelRow> {
     const rows = await sql<ChannelRow[]>`
       insert into channels (kind, label) values (${kind}, ${label}) returning *
     `
     const row = rows[0]
     if (row === undefined) throw new Error('не удалось создать канал')
-    await this.startChannel(row.id, row.kind, row.label)
+    await this.startChannel(row.id, row.kind, row.label, options)
     return row
   }
 
-  async startChannel(id: string, kind?: ChannelKind, label?: string): Promise<void> {
+  async startChannel(
+    id: string,
+    kind?: ChannelKind,
+    label?: string,
+    options?: DriverOptions,
+  ): Promise<void> {
     if (this.drivers.has(id)) return
 
     let resolvedKind = kind
@@ -96,7 +106,7 @@ export class ChannelManager extends EventEmitter {
       resolvedLabel ??= row.label
     }
 
-    const driver = createDriver(resolvedKind, id, resolvedLabel)
+    const driver = createDriver(resolvedKind, id, resolvedLabel, options)
     this.drivers.set(id, driver)
     this.wire(driver, resolvedLabel)
     await driver.start()
