@@ -24,7 +24,9 @@ async function main(): Promise<void> {
       .add(
         'to-amo',
         { dbMessageId: msg.dbId, channelId: msg.channelId, chatId: msg.chat.id },
-        { jobId: `in:${msg.dbId}` },
+        // Двоеточие в идентификаторе задачи очередь не принимает —
+        // на нём же строятся её внутренние ключи.
+        { jobId: `in-${msg.dbId}` },
       )
       .catch((err: unknown) => logger.error({ err }, 'не удалось поставить входящее в очередь'))
   })

@@ -73,9 +73,21 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     if (!(await client.isUserAuthorized())) {
       this.ready = false
       this.logger.warn('сессия больше не действует, показываю новый QR')
+      await this.detachClient()
       this.startQrLoginInBackground()
       return
     }
+
+    await this.attach(client)
+  }
+
+  /**
+   * Подписка на сообщения и переход в рабочее состояние.
+   * Вызывается и при обычном старте, и сразу после входа по QR —
+   * тем же соединением, которым вход и выполнялся.
+   */
+  private async attach(client: TgClient): Promise<void> {
+    this.client = client
 
     const me = await client.getMe()
     const phone = String(me?.phone ?? '').replace(/\D/g, '')
@@ -89,6 +101,19 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     this.ready = true
     this.logger.info({ phone }, 'аккаунт Телеграма в сети')
     this.emit('status', 'online', { phone, externalId: String(me?.id ?? '') })
+  }
+
+  /** Аккуратно закрывает текущее соединение, чтобы не оставлять его висеть. */
+  private async detachClient(): Promise<void> {
+    const client = this.client
+    this.client = null
+    this.ready = false
+    if (client === null) return
+    try {
+      await client.destroy()
+    } catch {
+      /* соединение уже закрыто */
+    }
   }
 
   /**
@@ -108,6 +133,7 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
   }
 
   private async loginByQr(): Promise<void> {
+    await this.detachClient()
     const client = new TelegramClient(
       new StringSession(''),
       config.TG_API_ID,
@@ -159,11 +185,12 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     // Пароль больше не нужен: дальше вход держится на сохранённой сессии.
     this.cloudPassword = undefined
     await saveSession(this.channelId, client.session.save() as string)
-    this.logger.info('вход по QR выполнен, поднимаю канал')
+    this.logger.info('вход по QR выполнен')
 
-    // Перезапускаемся уже с сохранённой сессией — так же, как при обычном старте.
-    this.client = null
-    await this.start()
+    // Дальше работаем ЭТИМ же соединением. Раньше здесь поднималось второе,
+    // а первое оставалось висеть: два клиента на одной сессии мешали друг
+    // другу, и обновления не приходили вовсе.
+    await this.attach(client)
   }
 
   private async handleIncoming(event: any): Promise<void> {
@@ -273,12 +300,14 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
   stop(): void {
     this.stopping = true
     this.ready = false
-    try {
-      void this.client?.disconnect()
-    } catch {
-      /* соединение уже закрыто */
-    }
+    const client = this.client
     this.client = null
+    if (client === null) return
+    // destroy, а не disconnect: disconnect оставляет живым цикл обновлений,
+    // и соединение продолжает висеть после остановки канала.
+    void Promise.resolve(client.destroy()).catch(() => {
+      /* соединение уже закрыто */
+    })
   }
 
   /** Имя собеседника — используется при разборе входящих. */
