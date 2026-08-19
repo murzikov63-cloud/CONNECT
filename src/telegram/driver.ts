@@ -13,6 +13,23 @@ import { displayName, extractContent, normalizeInbound } from './normalize.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/** Сетевые заминки, после которых надо просто подождать и повторить. */
+export function isTemporaryForTests(message: string): boolean {
+  return isTemporary(message)
+}
+
+function isTemporary(message: string): boolean {
+  return [
+    'while disconnected',
+    'Please reconnect',
+    'TIMEOUT',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'socket',
+    'Not connected',
+  ].some((marker) => message.toLowerCase().includes(marker.toLowerCase()))
+}
+
 /**
  * Подключение аккаунта Телеграма напрямую — так же, как это делают сторонние
  * клиенты. Ключи приложения берутся с my.telegram.org, вход по коду
@@ -172,11 +189,25 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
       )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      this.emit('status', 'logged_out', {
-        reason: message.includes('облачный пароль')
-          ? 'на аккаунте включён облачный пароль — укажите его при добавлении канала'
-          : `вход не удался: ${message}`,
-      })
+
+      if (message.includes('облачный пароль')) {
+        this.emit('status', 'logged_out', {
+          reason: 'на аккаунте включён облачный пароль — укажите его при добавлении канала',
+        })
+        return
+      }
+
+      // Обрыв связи — не разлогин. Раньше любая сетевая заминка присылала
+      // владельцу «номер разлогинен, сканируйте QR заново», хотя ничего
+      // сканировать не требовалось.
+      if (isTemporary(message)) {
+        this.logger.warn({ err }, 'связь оборвалась во время входа, пробую снова')
+        this.emit('status', 'offline', { reason: 'связь оборвалась, переподключаюсь' })
+        if (!this.stopping) setTimeout(() => this.startQrLoginInBackground(), 5000)
+        return
+      }
+
+      this.emit('status', 'logged_out', { reason: `вход не удался: ${message}` })
       return
     }
 

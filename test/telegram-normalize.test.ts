@@ -173,3 +173,25 @@ describe('приведение к общему формату', () => {
     expect(normalizeInbound(CH, { ...base, action: {} }, sender, false)).toBeNull()
   })
 })
+
+describe('временные обрывы связи', () => {
+  it('распознаются и не считаются разлогином', async () => {
+    // Раньше любая сетевая заминка присылала владельцу «номер разлогинен,
+    // сканируйте QR заново» — хотя сканировать было нечего.
+    const { isTemporaryForTests } = await import('../src/telegram/driver.js')
+    for (const m of [
+      'Cannot send requests while disconnected. Please reconnect.',
+      'Error: TIMEOUT',
+      'read ECONNRESET',
+      'Not connected',
+    ]) {
+      expect(isTemporaryForTests(m)).toBe(true)
+    }
+  })
+
+  it('настоящие причины разлогина временными не считаются', async () => {
+    const { isTemporaryForTests } = await import('../src/telegram/driver.js')
+    expect(isTemporaryForTests('AUTH_KEY_UNREGISTERED')).toBe(false)
+    expect(isTemporaryForTests('SESSION_REVOKED')).toBe(false)
+  })
+})

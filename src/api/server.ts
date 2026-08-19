@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs'
 import { stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { alert } from '../alerts/index.js'
+import { COOLDOWN_DAILY_MS, alert } from '../alerts/index.js'
 import { channelForScope } from '../amo/channels.js'
 import { chatApiReady, config } from '../config/index.js'
 import { sql } from '../db/index.js'
@@ -354,10 +354,14 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       // содержит scope_id, который знают только amoCRM и мы, так что защита
       // остаётся, хоть и слабее. Владельцу об этом сообщаем, чтобы это
       // не осталось незамеченным навсегда.
-      void alert('warn', 'amoCRM подписывает вебхуки не так, как ожидалось', {
-        Совпал: String(report['совпалВариант']),
-        Последствие: 'ответы менеджеров принимаются с проверкой только по адресу',
-      })
+      // Раз в сутки, а не на каждое сообщение: состояние известное,
+      // ждём ответа техподдержки amoCRM, а не новостей.
+      void alert(
+        'warn',
+        'amoCRM подписывает вебхуки не так, как ожидалось',
+        { Последствие: 'ответы менеджеров принимаются с проверкой только по адресу' },
+        COOLDOWN_DAILY_MS,
+      )
       // Сырое тело кладём рядом с медиа — по нему подберём верный способ.
       void writeFile(
         join(config.MEDIA_DIR, `_webhook-${Date.now()}.json`),
