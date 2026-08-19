@@ -191,13 +191,13 @@ export async function resolveChat(
     `
     const found = rows[0]
     if (found !== undefined) {
-      // Запоминаем беседу amoCRM, чтобы следующие сообщения находились сразу.
-      if (parsed.amoChatId !== '') {
-        await sql`
-          update chats set amo_chat_id = ${parsed.amoChatId}, updated_at = now()
-          where id = ${found.chat_id}
-        `
-      }
+      // Беседу amoCRM здесь НЕ запоминаем.
+      //
+      // Когда менеджер начинает разговор из карточки, amoCRM заводит свою
+      // беседу, не связанную с нашим conversation_id. Наша беседа — та,
+      // в которую ложатся входящие. Если подменить одну другой, входящие
+      // и исходящие разъедутся по двум разным беседам, и менеджер будет
+      // видеть половину разговора. Проверено на живой переписке.
       logger.info(
         { phone: parsed.receiverPhone, kind },
         'переписка найдена по телефону получателя',
