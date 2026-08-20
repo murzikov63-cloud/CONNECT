@@ -29,6 +29,7 @@ import {
   issueGuestPassword,
   revokeGuestPassword,
 } from './guest.js'
+import { handleEvent } from '../amo/events.js'
 import { openapi } from './openapi.js'
 import {
   checkPassword,
@@ -73,6 +74,16 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       } catch (err) {
         done(err as Error, undefined)
       }
+    },
+  )
+
+  // События amoCRM приходят полем формы, а не JSON. Держим их строкой:
+  // разбирать вложенные скобки нужно только нам и только в одном месте.
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      done(null, body)
     },
   )
 
@@ -534,6 +545,26 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       ...(parsed.amoMessageId !== '' ? { amoMessageId: parsed.amoMessageId } : {}),
     })
 
+    return reply.code(200).send({ ok: true })
+  })
+
+  // --- события amoCRM ---------------------------------------------------
+
+  /**
+   * Сюда amoCRM сообщает о новом контакте или сделке. Свои события она
+   * не подписывает, поэтому тайна — в самом адресе.
+   */
+  app.post<{ Params: { secret: string } }>('/amo-events/:secret', async (req, reply) => {
+    if (config.AMO_EVENTS_SECRET === '' || req.params.secret !== config.AMO_EVENTS_SECRET) {
+      return reply.code(404).send({ error: 'не найдено' })
+    }
+    const raw = typeof req.body === 'string' ? req.body : ''
+
+    // Отвечаем сразу: заводить беседы во всех мессенджерах долго, а amoCRM
+    // ждёт ответа несколько секунд и потом повторяет событие.
+    void handleEvent(manager, raw).catch((err: unknown) =>
+      logger.error({ err }, 'не удалось разобрать событие amoCRM'),
+    )
     return reply.code(200).send({ ok: true })
   })
 

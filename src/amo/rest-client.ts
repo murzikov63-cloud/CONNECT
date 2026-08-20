@@ -144,6 +144,47 @@ export async function linkChatToContact(contactId: number, amoChatId: string): P
   logger.info({ contactId, amoChatId }, 'чат привязан к контакту')
 }
 
+/** Телефоны из карточки контакта — их может быть несколько. */
+export async function contactPhones(contactId: number): Promise<{ name: string; phones: string[] }> {
+  const res = await request<{
+    name?: string
+    custom_fields_values?: { field_code?: string; values?: { value?: string }[] }[]
+  }>('GET', `/api/v4/contacts/${contactId}`)
+
+  const phones = (res.custom_fields_values ?? [])
+    .filter((f) => f.field_code === 'PHONE')
+    .flatMap((f) => f.values ?? [])
+    .map((v) => String(v.value ?? '').replace(/\D/g, ''))
+    .filter((v) => v.length >= 10)
+
+  return { name: res.name ?? '', phones: [...new Set(phones)] }
+}
+
+/** Контакты, привязанные к сделке. */
+export async function leadContactIds(leadId: number): Promise<number[]> {
+  const res = await request<{ _embedded?: { contacts?: { id: number }[] } }>(
+    'GET',
+    `/api/v4/leads/${leadId}?with=contacts`,
+  )
+  return (res._embedded?.contacts ?? []).map((c) => c.id)
+}
+
+export interface AmoWebhook {
+  id: number
+  destination: string
+  settings: string[]
+}
+
+export async function listWebhooks(): Promise<AmoWebhook[]> {
+  const res = await request<{ _embedded?: { webhooks?: AmoWebhook[] } }>('GET', '/api/v4/webhooks')
+  return res._embedded?.webhooks ?? []
+}
+
+export async function subscribeWebhook(destination: string, settings: string[]): Promise<void> {
+  await request('POST', '/api/v4/webhooks', { destination, settings })
+  logger.info({ destination, settings }, 'подписка на события amoCRM оформлена')
+}
+
 export async function checkConnection(): Promise<{ id: number; name: string }> {
   return request('GET', '/api/v4/account')
 }

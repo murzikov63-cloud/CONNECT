@@ -151,6 +151,26 @@ export interface ResolvedChat {
 }
 
 /**
+ * Забывает беседу, которую когда-то завела amoCRM.
+ *
+ * Менеджер написал через нашу беседу — значит в карточке он видит именно
+ * её, и ответ клиента должен лечь туда же. Прежняя беседа amoCRM может
+ * быть уже мертва: карточку, в которой она жила, удалили, и сообщения
+ * в неё уходят в никуда — amoCRM их принимает и нигде не показывает.
+ * Поэтому побеждает та беседа, которой менеджер пользовался последней.
+ */
+async function forgetStartedChat(chatId: string): Promise<void> {
+  const changed = await sql<{ id: string }[]>`
+    update chats set amo_started_chat_id = null, updated_at = now()
+    where id = ${chatId} and amo_started_chat_id is not null
+    returning id::text as id
+  `
+  if (changed[0] !== undefined) {
+    logger.info({ chatId }, 'менеджер вернулся в нашу беседу, прежнюю забываю')
+  }
+}
+
+/**
  * Находит нашу переписку по тому, что прислал amoCRM.
  * Порядок важен: сначала точные совпадения, телефон — последняя попытка.
  */
@@ -167,7 +187,11 @@ export async function resolveChat(
       from chats
       where amo_chat_id = ${parsed.amoChatId} or amo_started_chat_id = ${parsed.amoChatId}
     `
-    if (rows[0] !== undefined) return rows[0]
+    const found = rows[0]
+    if (found !== undefined) {
+      if (found.amo_chat_id === parsed.amoChatId) await forgetStartedChat(found.chat_id)
+      return found
+    }
   }
 
   // Запасной путь: наш собственный идентификатор вида «telegram-<id чата>».
@@ -177,7 +201,11 @@ export async function resolveChat(
       select id::text as chat_id, channel_id::text as channel_id, external_chat_id, amo_chat_id
       from chats where id = ${match[1]!}
     `
-    if (rows[0] !== undefined) return rows[0]
+    const found = rows[0]
+    if (found !== undefined) {
+      await forgetStartedChat(found.chat_id)
+      return found
+    }
   }
 
   // Менеджер начал разговор сам: беседа новая, но телефон получателя

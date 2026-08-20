@@ -5,6 +5,7 @@ import { closeDb, migrate } from './db/index.js'
 import { log } from './logger/index.js'
 import { closeQueues, inboundQueue } from './queue/index.js'
 import { createInboundWorker } from './amo/inbound.js'
+import { ensureSubscription } from './amo/events.js'
 import { createOutboundWorker } from './queue/outbound.js'
 import { cleanupOldMedia } from './wa/media.js'
 import { ChannelManager } from './channels/manager.js'
@@ -38,6 +39,12 @@ async function main(): Promise<void> {
   const app = await buildServer(manager)
   await app.listen({ host: '0.0.0.0', port: config.PORT })
   logger.info({ port: config.PORT }, 'сервис поднят')
+
+  // Подписку оформляем при запуске: так её не забудут при переезде
+  // на другой сервер и не потеряют при пересоздании аккаунта.
+  void ensureSubscription().catch((err: unknown) =>
+    logger.error({ err }, 'не удалось подписаться на события amoCRM'),
+  )
 
   const mediaCleanup = setInterval(
     () => {

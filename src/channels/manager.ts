@@ -209,7 +209,7 @@ export class ChannelManager extends EventEmitter {
       ([, d]) => d.kind === kind && d.isReady() && d.findChatByPhone !== undefined,
     )?.[0]
     if (channelId === undefined) {
-      logger.warn({ kind }, 'некому написать первым: подходящий номер не в сети')
+      logger.info({ kind }, 'подходящий номер не в сети')
       return null
     }
 
@@ -219,7 +219,7 @@ export class ChannelManager extends EventEmitter {
       return null
     })
     if (externalChatId === null || externalChatId === undefined || externalChatId === '') {
-      logger.warn({ kind, phone: digits }, 'собеседник по номеру не найден')
+      logger.info({ kind, phone: digits }, 'в этом мессенджере такого номера нет')
       return null
     }
 
