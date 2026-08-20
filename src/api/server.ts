@@ -23,6 +23,12 @@ import {
   resolveChat,
   verifyWebhookSignature,
 } from '../amo/webhook.js'
+import {
+  checkGuestPassword,
+  guestAccessExpiry,
+  issueGuestPassword,
+  revokeGuestPassword,
+} from './guest.js'
 import { openapi } from './openapi.js'
 import {
   checkPassword,
@@ -77,15 +83,40 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
   })
 
+  /**
+   * Что открыто вошедшему по временному паролю: увидеть список номеров
+   * и привязать один из них. Настройки, переписка и удаление — нет.
+   */
+  const GUEST_ALLOWED: { method: string; path: RegExp }[] = [
+    { method: 'GET', path: /^\/api\/channel-kinds$/ },
+    { method: 'GET', path: /^\/api\/numbers$/ },
+    { method: 'GET', path: /^\/api\/numbers\/[^/]+\/qr$/ },
+    { method: 'POST', path: /^\/api\/numbers\/[^/]+\/restart$/ },
+  ]
+
   /** Пускает по постоянному ключу (скрипты) или по токену входа (админка). */
   const auth = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const key = req.headers['x-api-key']
     if (typeof key === 'string' && key === config.ADMIN_API_KEY) return
 
     const header = req.headers.authorization ?? ''
-    if (header.startsWith('Bearer ') && verifyToken(header.slice(7))) return
+    const scope = header.startsWith('Bearer ') ? verifyToken(header.slice(7)) : null
+    if (scope === null) {
+      await reply.code(401).send({ error: 'нужен вход' })
+      return
+    }
+    if (scope === 'admin') return
 
-    await reply.code(401).send({ error: 'нужен вход' })
+    // Гость: пароль мог быть отозван, пока он сидел на странице.
+    if ((await guestAccessExpiry()) === null) {
+      await reply.code(401).send({ error: 'временный доступ закрыт' })
+      return
+    }
+    const path = (req.url.split('?')[0] ?? '').replace(/\/+$/, '')
+    const allowed = GUEST_ALLOWED.some((r) => r.method === req.method && r.path.test(path))
+    if (allowed) return
+
+    await reply.code(403).send({ error: 'временный доступ: только подключение номера' })
   }
   const guarded = { preHandler: auth }
 
@@ -114,13 +145,50 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     if (loginBlocked(ip)) {
       return reply.code(429).send({ error: 'слишком много попыток, подождите 15 минут' })
     }
-    if (!checkPassword(req.body?.password ?? '')) {
-      registerFailure(ip)
-      logger.warn({ ip }, 'неудачная попытка входа')
-      return reply.code(401).send({ error: 'неверный пароль' })
+    const password = req.body?.password ?? ''
+    if (checkPassword(password)) {
+      registerSuccess(ip)
+      return issueToken()
     }
-    registerSuccess(ip)
-    return issueToken()
+
+    // Временный пароль: срок токена — до конца выданного окна, не дольше.
+    const guestUntil = await checkGuestPassword(password)
+    if (guestUntil !== null) {
+      registerSuccess(ip)
+      logger.info({ ip }, 'вход по временному паролю')
+      return issueToken(Date.now(), 'guest', guestUntil)
+    }
+
+    registerFailure(ip)
+    logger.warn({ ip }, 'неудачная попытка входа')
+    return reply.code(401).send({ error: 'неверный пароль' })
+  })
+
+  // --- временный доступ -------------------------------------------------
+
+  /** Срок действующего временного пароля. Сам пароль не хранится. */
+  app.get('/api/access/guest', guarded, async () => ({
+    expiresAt: await guestAccessExpiry(),
+  }))
+
+  /**
+   * Заводит временный пароль. Показывается один раз — у нас остаётся
+   * только его отпечаток, восстановить нельзя, можно выдать новый.
+   */
+  app.post<{ Body: { hours?: number } }>('/api/access/guest', guarded, async (req, reply) => {
+    const hours = Number(req.body?.hours ?? 3)
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 24) {
+      return reply.code(400).send({ error: 'срок — от нескольких минут до суток' })
+    }
+    const issued = await issueGuestPassword(hours)
+    logger.info({ expiresAt: issued.expiresAt }, 'выдан временный пароль')
+    return issued
+  })
+
+  app.delete('/api/access/guest', guarded, async () => {
+    await revokeGuestPassword()
+    logger.info({}, 'временный пароль отозван')
+    return { ok: true }
   })
 
   // --- номера -----------------------------------------------------------

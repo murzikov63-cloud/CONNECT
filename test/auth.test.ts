@@ -12,31 +12,52 @@ import {
 describe('токен входа', () => {
   it('свежий токен принимается', () => {
     const { token } = issueToken()
-    expect(verifyToken(token)).toBe(true)
+    expect(verifyToken(token)).toBe('admin')
   })
 
   it('просроченный токен не принимается', () => {
     const now = Date.now()
     const { token, expiresAt } = issueToken(now)
-    expect(verifyToken(token, expiresAt + 1)).toBe(false)
+    expect(verifyToken(token, expiresAt + 1)).toBeNull()
   })
 
   it('подделанный срок жизни не проходит', () => {
     const { token } = issueToken()
     const signature = token.slice(token.indexOf('.') + 1)
     const forged = `${Date.now() + 10 ** 9}.${signature}`
-    expect(verifyToken(forged)).toBe(false)
+    expect(verifyToken(forged)).toBeNull()
   })
 
   it('испорченная подпись не проходит', () => {
     const { token } = issueToken()
-    expect(verifyToken(`${token}x`)).toBe(false)
+    expect(verifyToken(`${token}x`)).toBeNull()
   })
 
   it('мусор вместо токена не роняет проверку', () => {
     for (const junk of ['', '.', 'abc', '....', '123.']) {
-      expect(verifyToken(junk)).toBe(false)
+      expect(verifyToken(junk)).toBeNull()
     }
+  })
+
+  it('временный вход отличается от обычного', () => {
+    const now = Date.now()
+    const { token } = issueToken(now, 'guest', now + 60 * 60 * 1000)
+    expect(verifyToken(token, now)).toBe('guest')
+  })
+
+  it('гостю нельзя переписать себе права: подпись не сойдётся', () => {
+    const now = Date.now()
+    const expiresAt = now + 60 * 60 * 1000
+    const { token } = issueToken(now, 'guest', expiresAt)
+    const signature = token.slice(token.indexOf('.') + 1)
+    // Убрать «:guest» из тела — самая очевидная попытка стать админом.
+    expect(verifyToken(`${expiresAt}.${signature}`, now)).toBeNull()
+  })
+
+  it('неизвестные права не принимаются', () => {
+    const now = Date.now()
+    const { token } = issueToken(now, 'root' as never, now + 1000)
+    expect(verifyToken(token, now)).toBeNull()
   })
 })
 

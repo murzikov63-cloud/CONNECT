@@ -14,6 +14,12 @@ import { config } from '../config/index.js'
 
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000
 
+/**
+ * Что позволено вошедшему. `admin` — всё; `guest` — только подключение
+ * номера, по временному паролю (см. api/guest.ts).
+ */
+export type Scope = 'admin' | 'guest'
+
 function sign(payload: string): string {
   return createHmac('sha256', config.ADMIN_API_KEY).update(payload).digest('base64url')
 }
@@ -25,20 +31,30 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb)
 }
 
-export function issueToken(now: number = Date.now()): { token: string; expiresAt: number } {
-  const expiresAt = now + TOKEN_TTL_MS
-  const payload = String(expiresAt)
+export function issueToken(
+  now: number = Date.now(),
+  scope: Scope = 'admin',
+  expiresAt: number = now + TOKEN_TTL_MS,
+): { token: string; expiresAt: number } {
+  // У обычного входа в теле только срок — таким токен был с самого начала,
+  // и выданные раньше продолжают работать.
+  const payload = scope === 'admin' ? String(expiresAt) : `${expiresAt}:${scope}`
   return { token: `${payload}.${sign(payload)}`, expiresAt }
 }
 
-export function verifyToken(token: string, now: number = Date.now()): boolean {
+/** Права вошедшего или null, если токен поддельный либо просрочен. */
+export function verifyToken(token: string, now: number = Date.now()): Scope | null {
   const dot = token.indexOf('.')
-  if (dot <= 0) return false
+  if (dot <= 0) return null
   const payload = token.slice(0, dot)
   const signature = token.slice(dot + 1)
-  if (!safeEqual(signature, sign(payload))) return false
-  const expiresAt = Number(payload)
-  return Number.isFinite(expiresAt) && expiresAt > now
+  if (!safeEqual(signature, sign(payload))) return null
+
+  const [rawExpiry, rawScope] = payload.split(':')
+  const expiresAt = Number(rawExpiry)
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return null
+  if (rawScope === undefined) return 'admin'
+  return rawScope === 'guest' ? 'guest' : null
 }
 
 export function checkPassword(password: string): boolean {
