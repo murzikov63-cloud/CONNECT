@@ -83,17 +83,6 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
   })
 
-  /**
-   * Что открыто вошедшему по временному паролю: увидеть список номеров
-   * и привязать один из них. Настройки, переписка и удаление — нет.
-   */
-  const GUEST_ALLOWED: { method: string; path: RegExp }[] = [
-    { method: 'GET', path: /^\/api\/channel-kinds$/ },
-    { method: 'GET', path: /^\/api\/numbers$/ },
-    { method: 'GET', path: /^\/api\/numbers\/[^/]+\/qr$/ },
-    { method: 'POST', path: /^\/api\/numbers\/[^/]+\/restart$/ },
-  ]
-
   /** Пускает по постоянному ключу (скрипты) или по токену входа (админка). */
   const auth = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const key = req.headers['x-api-key']
@@ -107,16 +96,21 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     }
     if (scope === 'admin') return
 
-    // Гость: пароль мог быть отозван, пока он сидел на странице.
+    // Вошедший по временному паролю работает как обычно, но пароль могли
+    // отозвать, пока страница у него открыта. Поэтому проверяем на каждом
+    // запросе: отзыв должен срабатывать сразу, а не когда истечёт токен.
     if ((await guestAccessExpiry()) === null) {
-      await reply.code(401).send({ error: 'временный доступ закрыт' })
+      await reply.code(401).send({ error: 'временный пароль больше не действует' })
       return
     }
-    const path = (req.url.split('?')[0] ?? '').replace(/\/+$/, '')
-    const allowed = GUEST_ALLOWED.some((r) => r.method === req.method && r.path.test(path))
-    if (allowed) return
 
-    await reply.code(403).send({ error: 'временный доступ: только подключение номера' })
+    // Единственное, чего по временному паролю нельзя: выдать временный
+    // пароль. Иначе временный доступ продлевал бы сам себя без конца.
+    const path = (req.url.split('?')[0] ?? '').replace(/\/+$/, '')
+    if (path === '/api/access/guest' && req.method !== 'GET') {
+      await reply.code(403).send({ error: 'по временному паролю этого нельзя' })
+      return
+    }
   }
   const guarded = { preHandler: auth }
 
@@ -172,7 +166,8 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
   }))
 
   /**
-   * Заводит временный пароль. Показывается один раз — у нас остаётся
+   * Заводит временный пароль: обычный вход в админку, но со сроком
+   * и с отзывом в одно нажатие. Показывается один раз — у нас остаётся
    * только его отпечаток, восстановить нельзя, можно выдать новый.
    */
   app.post<{ Body: { hours?: number } }>('/api/access/guest', guarded, async (req, reply) => {
