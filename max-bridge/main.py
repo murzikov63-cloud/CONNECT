@@ -45,6 +45,10 @@ class Session:
     user_id: str = ""
     error: str = ""
     stopping: bool = False
+    raw_events: int = 0
+    messages_seen: int = 0
+    last_event_at: float = field(default_factory=time.time)
+    reconnects: int = 0
     started_at: float = field(default_factory=time.time)
 
 
@@ -180,6 +184,13 @@ def make_client(session: Session) -> WebClient:
         except Exception as err:  # noqa: BLE001
             log.exception("ошибка обработки входящего: %s", err)
 
+    @client.on_raw()
+    async def _on_raw(frame: Any, c: WebClient) -> None:  # type: ignore[misc]
+        # Диагностика: показывает, доходят ли до нас события вообще.
+        # Содержимое не пишем — только вид события.
+        session.raw_events += 1
+        session.last_event_at = time.time()
+
     @client.on_disconnect()
     async def _on_disconnect(c: WebClient) -> None:  # type: ignore[misc]
         if not session.stopping:
@@ -190,7 +201,15 @@ def make_client(session: Session) -> WebClient:
 
 
 async def handle_message(session: Session, message: Any) -> None:
+    session.messages_seen += 1
     chat_id = getattr(message, "chat_id", None)
+    log.info(
+        "канал %s: сообщение #%s (чат %s, есть текст: %s)",
+        session.channel_id,
+        session.messages_seen,
+        chat_id,
+        bool(getattr(message, "text", "")),
+    )
     if chat_id is None:
         return
 
@@ -265,6 +284,10 @@ async def status_channel(request: web.Request) -> web.Response:
             "phone": session.phone,
             "userId": session.user_id,
             "error": session.error,
+            "rawEvents": session.raw_events,
+            "messagesSeen": session.messages_seen,
+            "silenceSec": round(time.time() - session.last_event_at),
+            "reconnects": session.reconnects,
         }
     )
 
@@ -325,9 +348,87 @@ async def stop_channel(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def recent_chats(request: web.Request) -> web.Response:
+    """Последние переписки аккаунта — проверка, что связь действительно живая."""
+    check_secret(request)
+    session = sessions.get(request.match_info["cid"])
+    if session is None or session.client is None:
+        raise web.HTTPServiceUnavailable(text="канал не в сети")
+    chats = await session.client.fetch_chats()
+    out = []
+    for c in list(chats)[:10]:
+        last = getattr(c, "last_message", None)
+        out.append(
+            {
+                "chatId": getattr(c, "id", None),
+                "title": getattr(c, "title", None),
+                "lastText": (getattr(last, "text", "") or "")[:40] if last else "",
+                "lastTime": getattr(last, "time", None) if last else None,
+            }
+        )
+    return web.json_response({"chats": out})
+
+
+# MAX присылает «пульс» примерно раз в 30 секунд. Если его нет несколько
+# минут — связь оборвалась. Библиотека при этом молчит: за сутки работы она
+# ни разу не сообщила о разрыве, хотя сообщения до нас не доходили.
+HEARTBEAT_TIMEOUT = 180.0
+WATCHDOG_PERIOD = 60.0
+
+
+async def watchdog() -> None:
+    while True:
+        await asyncio.sleep(WATCHDOG_PERIOD)
+        for cid, session in list(sessions.items()):
+            if session.stopping or session.status != "online":
+                continue
+            silence = time.time() - session.last_event_at
+            if silence < HEARTBEAT_TIMEOUT:
+                continue
+
+            log.warning("канал %s: тишина %.0f сек, переподключаюсь", cid, silence)
+            session.reconnects += 1
+            session.status = "connecting"
+            try:
+                if session.client is not None:
+                    await session.client.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            if session.task is not None:
+                session.task.cancel()
+
+            session.client = make_client(session)
+            session.last_event_at = time.time()
+
+            async def run(s: Session = session) -> None:
+                try:
+                    await s.client.start()  # type: ignore[union-attr]
+                except Exception as err:  # noqa: BLE001
+                    s.status = "offline"
+                    s.error = str(err)[:300]
+                    log.error("канал %s: переподключение не удалось: %s", s.channel_id, s.error)
+
+            session.task = asyncio.create_task(run())
+
+
+async def on_startup(app: web.Application) -> None:
+    app["watchdog"] = asyncio.create_task(watchdog())
+
+
 async def health(_: web.Request) -> web.Response:
     return web.json_response(
-        {"ok": True, "channels": {c: s.status for c, s in sessions.items()}}
+        {
+            "ok": True,
+            "channels": {
+                c: {
+                    "status": s.status,
+                    "silenceSec": round(time.time() - s.last_event_at),
+                    "messagesSeen": s.messages_seen,
+                    "reconnects": s.reconnects,
+                }
+                for c, s in sessions.items()
+            },
+        }
     )
 
 
@@ -339,6 +440,8 @@ def build_app() -> web.Application:
     app.router.add_post("/channels/{cid}/send", send_message)
     app.router.add_get("/channels/{cid}/search", search_phone)
     app.router.add_post("/channels/{cid}/stop", stop_channel)
+    app.router.add_get("/channels/{cid}/chats", recent_chats)
+    app.on_startup.append(on_startup)
     return app
 
 

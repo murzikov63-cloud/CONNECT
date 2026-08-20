@@ -109,6 +109,16 @@ export class MaxDriver extends EventEmitter implements ChannelDriver {
       this.emit('qr', dataUrl)
     }
 
+    // Служба могла перезапуститься и забыть про канал. Раньше сервис этого
+    // не замечал: состояние оставалось прежним, а сообщения не приходили.
+    if (state.status === 'new') {
+      this.logger.warn('служба MAX потеряла канал, поднимаю заново')
+      this.status = 'connecting'
+      this.emit('status', 'connecting', {})
+      await this.bridge('POST', '/start')
+      return
+    }
+
     if (state.status === this.status) return
     this.status = state.status
 
