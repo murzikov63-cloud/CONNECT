@@ -37,6 +37,7 @@ interface Row {
   avatar_url: string | null
   amo_chat_id: string | null
   amo_started_chat_id: string | null
+  amo_conversation_key: string | null
   amo_contact_id: string | null
   amo_lead_id: string | null
   channel_kind: string
@@ -54,7 +55,10 @@ function toPublicUrl(value: string | null): string | undefined {
  * что это та же самая беседа, а не новая.
  */
 function conversationId(row: Row): string {
-  return `${row.channel_kind}-${row.chat_id}`
+  // Обычно имя строится из номера переписки. Но если карточку, к которой
+  // была привязана беседа, удалили, мы заводим беседу заново под другим
+  // именем — и с этого момента пишем под ним.
+  return row.amo_conversation_key ?? `${row.channel_kind}-${row.chat_id}`
 }
 
 /**
@@ -103,7 +107,7 @@ async function loadRow(messageId: string): Promise<Row | null> {
            m.occurred_at, m.sender_name,
            c.id::text            as chat_id,
            c.external_chat_id, c.phone as chat_phone, c.push_name, c.avatar_url,
-           c.amo_chat_id, c.amo_started_chat_id,
+           c.amo_chat_id, c.amo_started_chat_id, c.amo_conversation_key,
            c.amo_contact_id::text as amo_contact_id,
            c.amo_lead_id::text   as amo_lead_id,
            ch.kind               as channel_kind,

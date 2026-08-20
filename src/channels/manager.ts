@@ -3,6 +3,7 @@ import { alert } from '../alerts/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import { getSettings, isPersonalNumber } from '../settings.js'
+import { toInternationalPhone } from '../utils.js'
 import type { DeliveryStatus, InboundMessage, ChannelStatus } from '../types.js'
 import { clearAuthState } from '../wa/auth-state.js'
 import { createDriver } from './registry.js'
@@ -202,7 +203,7 @@ export class ChannelManager extends EventEmitter {
     phone: string,
     name: string,
   ): Promise<{ chat_id: string; channel_id: string; external_chat_id: string } | null> {
-    const digits = phone.replace(/\D/g, '')
+    const digits = toInternationalPhone(phone)
     if (digits === '') return null
 
     const channelId = [...this.drivers.entries()].find(

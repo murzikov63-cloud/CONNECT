@@ -29,6 +29,11 @@ const logger = log('amo-events')
 
 const KINDS: ChannelKind[] = ['telegram', 'whatsapp', 'max']
 
+/** Отличает новое имя беседы от прежних. Время годится: оно не повторится. */
+function counter(): number {
+  return Math.floor(Date.now() / 1000)
+}
+
 /** Адрес, по которому amoCRM сообщает о событиях. Тайна — в самом адресе. */
 export function eventsPath(secret: string = config.AMO_EVENTS_SECRET): string {
   return `/amo-events/${secret}`
@@ -101,22 +106,45 @@ async function openOne(
   // И то и другое — обычное дело, не авария.
   if (opened === null) return
 
-  const already = await sql<{ amo_chat_id: string | null; amo_contact_id: string | null }[]>`
-    select amo_chat_id, amo_contact_id::text as amo_contact_id from chats where id = ${opened.chat_id}
+  const already = await sql<
+    { amo_chat_id: string | null; amo_contact_id: string | null; amo_conversation_key: string | null }[]
+  >`
+    select amo_chat_id, amo_contact_id::text as amo_contact_id, amo_conversation_key
+    from chats where id = ${opened.chat_id}
   `
   const row = already[0]
   if (row?.amo_chat_id != null && row.amo_contact_id === String(contactId)) return
 
-  const created = await createChat(channelForKind(kind), `${kind}-${opened.chat_id}`, {
+  const user = {
     id: `${kind}-${opened.external_chat_id}`,
     name: name === '' ? 'Клиент' : name,
     profile: { phone },
-  })
+  }
+  const channel = channelForKind(kind)
+
+  let key = row?.amo_conversation_key ?? `${kind}-${opened.chat_id}`
+  let created = await createChat(channel, key, user)
+  let linked = await linkChatToContact(contactId, created.id)
+
+  if (!linked) {
+    // Беседа висит на другой карточке — обычно на удалённой. Перевесить
+    // amoCRM не даёт, поэтому заводим новую под другим именем: старая
+    // остаётся при своей карточке, а переписка продолжается в новой.
+    key = `${kind}-${opened.chat_id}-${counter()}`
+    created = await createChat(channel, key, user)
+    linked = await linkChatToContact(contactId, created.id)
+    logger.info({ kind, chatId: opened.chat_id, key }, 'завёл беседу заново под новым именем')
+  }
+
   await sql`
-    update chats set amo_chat_id = ${created.id}, amo_contact_id = ${contactId}, updated_at = now()
+    update chats set
+      amo_chat_id = ${created.id},
+      amo_conversation_key = ${key},
+      amo_contact_id = ${contactId},
+      amo_started_chat_id = null,
+      updated_at = now()
     where id = ${opened.chat_id}
   `
-  await linkChatToContact(contactId, created.id)
   logger.info({ kind, contactId, chatId: opened.chat_id }, 'беседа заведена в карточке')
 }
 

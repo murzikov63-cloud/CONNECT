@@ -7,6 +7,8 @@ import {
   normalizeInbound,
   phoneToJid,
   unwrapMessage,
+  isBroadcastJid,
+  realJid,
 } from '../src/wa/normalize.js'
 
 const NUMBER_ID = '11111111-1111-1111-1111-111111111111'
@@ -154,5 +156,28 @@ describe('normalizeInbound', () => {
   it('timestamp в виде Long тоже понимается', () => {
     const msg = normalizeInbound(NUMBER_ID, { ...base, messageTimestamp: { low: 1787000001 } })
     expect(msg?.occurredAt.getTime()).toBe(1787000001 * 1000)
+  })
+})
+
+describe('новые адреса WhatsApp', () => {
+  it('внутренний адрес заменяется телефонным, если он рядом', () => {
+    const key = { remoteJid: '120065978589278@lid', senderPn: '79660388883@s.whatsapp.net' }
+    expect(realJid(key)).toBe('79660388883@s.whatsapp.net')
+  })
+
+  it('без телефонного адреса разговор пропускаем', () => {
+    // Иначе карточка в amoCRM заводится на внутренний номер WhatsApp,
+    // а это не человек и не телефон.
+    expect(realJid({ remoteJid: '120065978589278@lid' })).toBe('')
+  })
+
+  it('обычный адрес не трогаем', () => {
+    expect(realJid({ remoteJid: '79660388883@s.whatsapp.net' })).toBe('79660388883@s.whatsapp.net')
+  })
+
+  it('рассылки и каналы узнаются', () => {
+    expect(isBroadcastJid('status@broadcast')).toBe(true)
+    expect(isBroadcastJid('123@newsletter')).toBe(true)
+    expect(isBroadcastJid('79660388883@s.whatsapp.net')).toBe(false)
   })
 })

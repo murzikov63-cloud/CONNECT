@@ -391,7 +391,13 @@ async def search_phone(request: web.Request) -> web.Response:
     if session is None or session.client is None or session.status != "online":
         raise web.HTTPServiceUnavailable(text="канал не в сети")
     phone = request.query.get("phone", "")
-    user = await session.client.search_by_phone(phone)
+    try:
+        user = await session.client.search_by_phone(phone)
+    except Exception as err:  # noqa: BLE001
+        # «Такого человека нет» библиотека сообщает исключением. Для нас это
+        # обычный ответ: значит, в MAX его просто нет.
+        log.info("канал %s: по номеру никого нет (%s)", session.channel_id, str(err)[:120])
+        return web.json_response({"found": False})
     if user is None:
         return web.json_response({"found": False})
     uid = getattr(user, "id", None) or getattr(getattr(user, "contact", None), "id", None)

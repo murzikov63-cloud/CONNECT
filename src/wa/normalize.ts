@@ -182,10 +182,32 @@ export function isIgnorableMessage(rawMessage: any): boolean {
   )
 }
 
+/**
+ * Настоящий адрес собеседника.
+ *
+ * WhatsApp постепенно прячет телефоны за внутренним номером вида
+ * «12345@lid». По такому адресу человека не опознать: телефона в нём нет,
+ * и карточка в amoCRM завелась бы на пустое место. Телефонный адрес
+ * WhatsApp кладёт рядом — берём его. Если не положил, разговор пропускаем:
+ * лучше не показать сообщение, чем завести карточку неизвестно на кого.
+ */
+export function realJid(key: any): string {
+  const jid: string = key?.remoteJid ?? ''
+  if (!jid.endsWith('@lid')) return jid
+  const alt: string = key?.senderPn ?? key?.participantPn ?? key?.remoteJidAlt ?? ''
+  return alt.endsWith('@s.whatsapp.net') ? alt : ''
+}
+
+/** Рассылки и каналы WhatsApp — не переписка с клиентом. */
+export function isBroadcastJid(jid: string): boolean {
+  return jid.endsWith('@newsletter') || jid.endsWith('@broadcast') || jid === 'status@broadcast'
+}
+
 export function normalizeInbound(channelId: string, msg: any): InboundMessage | null {
-  const externalChatId: string = msg?.key?.remoteJid ?? ''
+  const externalChatId = realJid(msg?.key)
   const externalMessageId: string = msg?.key?.id ?? ''
   if (externalChatId === '' || externalMessageId === '') return null
+  if (isBroadcastJid(externalChatId)) return null
   if (msg.message == null || isIgnorableMessage(msg.message)) return null
 
   const content = extractContent(msg.message)

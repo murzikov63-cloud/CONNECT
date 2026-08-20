@@ -25,6 +25,12 @@
 		reverse_proxy app:3000
 	}
 
+	# События amoCRM: новые контакты и сделки. Свои события amoCRM
+	# не подписывает, тайна — в самом адресе, проверяет её приложение.
+	handle /amo-events/* {
+		reverse_proxy app:3000
+	}
+
 	# Медиа по подписанным ссылкам — их скачивает amoCRM
 	handle /media/* {
 		reverse_proxy app:3000

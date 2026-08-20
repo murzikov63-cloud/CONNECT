@@ -150,4 +150,15 @@ export const migrations: Migration[] = [
       alter table chats rename column amo_conversation to amo_started_chat_id;
     `,
   },
+  {
+    name: '004_amo_conversation_key',
+    sql: `
+      -- Имя, под которым amoCRM знает нашу переписку. Обычно оно строится
+      -- из номера переписки, но иногда приходится завести новое: если
+      -- карточку удалили, беседа остаётся привязанной к ней навсегда —
+      -- перевесить её amoCRM не разрешает, а сообщения в неё уходят
+      -- в никуда. Тогда заводим беседу заново, под новым именем.
+      alter table chats add column if not exists amo_conversation_key text;
+    `,
+  },
 ]
