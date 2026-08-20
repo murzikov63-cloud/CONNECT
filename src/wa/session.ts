@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import QRCode from 'qrcode'
+import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import type { DeliveryStatus, InboundMessage, MediaPayload, ChannelStatus, OutboundMessage } from '../types.js'
 import {
@@ -80,6 +81,15 @@ export class WaSession extends EventEmitter {
       },
       printQRInTerminal: false,
       markOnlineOnConnect: false,
+      // Ответ на просьбу прислать сообщение заново. Когда телефон
+      // собеседника не смог расшифровать наше сообщение, он просит
+      // отправить его повторно — и без этого обработчика оно навсегда
+      // остаётся у него надписью «Ожидание сообщения». Проверено живьём
+      // на свежеподключённом номере.
+      getMessage: async (key: { id?: string | null }) => this.recallSent(key?.id ?? ''),
+      // Начальные запросы к WhatsApp иногда не укладываются в минуту,
+      // и подключение остаётся недоделанным.
+      defaultQueryTimeoutMs: 120_000,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
       browser: ['Messenger', 'Chrome', '121.0.0'],
@@ -236,6 +246,39 @@ export class WaSession extends EventEmitter {
     return first?.exists === true ? String(first.jid) : null
   }
 
+  /**
+   * Что мы недавно отправили — на случай, если собеседник попросит
+   * прислать заново. Держим в памяти немного и коротко: просьба приходит
+   * в первые секунды, а не через день.
+   */
+  private readonly sent = new Map<string, unknown>()
+  private static readonly SENT_KEEP = 300
+
+  private remember(id: string, content: unknown): void {
+    if (id === '') return
+    this.sent.set(id, content)
+    if (this.sent.size > WaSession.SENT_KEEP) {
+      const oldest = this.sent.keys().next().value
+      if (oldest !== undefined) this.sent.delete(oldest)
+    }
+  }
+
+  /** Достаёт отправленное: сперва из памяти, потом из базы — там текст. */
+  private async recallSent(id: string): Promise<{ conversation: string } | undefined> {
+    if (id === '') return undefined
+    const kept = this.sent.get(id)
+    if (kept !== undefined) return kept as { conversation: string }
+
+    // После перезапуска память пуста, но текст сообщения есть у нас в базе.
+    const rows = await sql<{ body: string | null }[]>`
+      select body from messages
+      where channel_id = ${this.channelId} and external_message_id = ${id}
+      limit 1
+    `
+    const body = rows[0]?.body
+    return body == null || body === '' ? undefined : { conversation: body }
+  }
+
   async send(out: OutboundMessage): Promise<string> {
     const sock = this.sock
     if (sock === null) throw new Error(`Сессия ${this.label} не поднята`)
@@ -259,6 +302,8 @@ export class WaSession extends EventEmitter {
     const sent = await sock.sendMessage(out.externalChatId, content as any, options as any)
     const id: string = (sent as any)?.key?.id ?? ''
     if (id === '') throw new Error('WhatsApp не вернул id отправленного сообщения')
+    // Запоминаем на случай просьбы прислать заново.
+    this.remember(id, (sent as any)?.message)
     return id
   }
 
