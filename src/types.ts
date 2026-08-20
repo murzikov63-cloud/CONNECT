@@ -52,6 +52,12 @@ export interface InboundMessage {
 export interface OutboundMessage {
   channelId: string
   externalChatId: string
+  /**
+   * Телефон получателя, если известен. Нужен для первого сообщения
+   * незнакомому человеку: мессенджер помнит собеседника, только пока
+   * не перезапустился, а по телефону его всегда можно найти заново.
+   */
+  phone?: string
   type: MessageType
   body: string
   /** Локальный путь к уже скачанному файлу либо http(s)-ссылка из amoCRM. */

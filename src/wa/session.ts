@@ -221,6 +221,21 @@ export class WaSession extends EventEmitter {
   }
 
   /** Возвращает id отправленного сообщения в WhatsApp. */
+  /**
+   * Проверяет, есть ли такой номер в WhatsApp, и возвращает его адрес.
+   * Нужно для первого сообщения тому, кто нам ещё не писал: слать вслепую
+   * нельзя — попытки писать несуществующим номерам WhatsApp считает
+   * признаком рассылки.
+   */
+  async findChatByPhone(phone: string): Promise<string | null> {
+    const sock = this.sock
+    const digits = phone.replace(/\D/g, '')
+    if (sock === null || !this.isReady() || digits === '') return null
+    const found = await sock.onWhatsApp(digits)
+    const first = found?.[0]
+    return first?.exists === true ? String(first.jid) : null
+  }
+
   async send(out: OutboundMessage): Promise<string> {
     const sock = this.sock
     if (sock === null) throw new Error(`Сессия ${this.label} не поднята`)

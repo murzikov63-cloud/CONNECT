@@ -7,7 +7,7 @@ import type { ChannelDriver } from '../channels/types.js'
 import type { MediaPayload, OutboundMessage } from '../types.js'
 import { absoluteMediaPath, saveMedia } from '../wa/media.js'
 import { loadSession, saveSession } from './auth-state.js'
-import { Api, NewMessage, StringSession, TelegramClient } from './gramjs.js'
+import { Api, NewMessage, StringSession, TelegramClient, bigInt } from './gramjs.js'
 import type { TgClient } from './gramjs.js'
 import { displayName, extractContent, normalizeInbound } from './normalize.js'
 
@@ -269,11 +269,72 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     }
   }
 
+  /**
+   * Ищет человека в Телеграме по номеру телефона.
+   *
+   * Два способа, и оба могут не сработать: человек вправе запретить
+   * находить себя по номеру, и тогда написать ему первым нельзя никак.
+   * Сначала пробуем спросить напрямую, и только потом — через добавление
+   * в контакты: второй способ показывает наш номер собеседнику.
+   */
+  async findChatByPhone(phone: string): Promise<string | null> {
+    const client = this.client
+    if (client === null || !this.ready) throw new Error(`Канал ${this.label} не в сети`)
+    const digits = phone.replace(/\D/g, '')
+    if (digits === '') return null
+
+    try {
+      const found = await client.invoke(new Api.contacts.ResolvePhone({ phone: digits }))
+      const user = found?.users?.[0]
+      if (user !== undefined) return String(user.id)
+    } catch (err) {
+      this.logger.info({ err: String(err).slice(0, 120) }, 'по номеру напрямую не нашёлся')
+    }
+
+    try {
+      const imported = await client.invoke(
+        new Api.contacts.ImportContacts({
+          contacts: [
+            new Api.InputPhoneContact({
+              clientId: bigInt(0),
+              phone: `+${digits}`,
+              firstName: 'Клиент',
+              lastName: '',
+            }),
+          ],
+        }),
+      )
+      const user = imported?.users?.[0]
+      return user === undefined ? null : String(user.id)
+    } catch (err) {
+      this.logger.warn({ err: String(err).slice(0, 200) }, 'поиск по номеру не удался')
+      return null
+    }
+  }
+
+  /**
+   * Телеграм узнаёт собеседника по паре «номер плюс пропуск», а пропуск
+   * живёт в памяти до перезапуска. Поэтому если он потерялся — находим
+   * человека по телефону заново.
+   */
+  private async resolvePeer(externalChatId: string, phone: string | undefined): Promise<unknown> {
+    const client = this.client
+    try {
+      return await client.getInputEntity(externalChatId)
+    } catch (err) {
+      if (phone === undefined || phone === '') throw err
+      this.logger.info({ externalChatId }, 'собеседник забылся, ищу по телефону заново')
+      const found = await this.findChatByPhone(phone)
+      if (found === null) throw err
+      return await client.getInputEntity(found)
+    }
+  }
+
   async send(out: OutboundMessage): Promise<string> {
     const client = this.client
     if (client === null || !this.ready) throw new Error(`Канал ${this.label} не в сети`)
 
-    const peer = out.externalChatId
+    const peer = await this.resolvePeer(out.externalChatId, out.phone)
     const options: Record<string, unknown> = {}
     if (out.body !== '') options['message'] = out.body
     if (out.quotedExternalMessageId !== undefined) {

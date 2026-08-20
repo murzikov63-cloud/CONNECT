@@ -468,7 +468,29 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       return reply.code(200).send({ ok: true })
     }
 
-    const chat = await resolveChat(parsed, amoChannel.kind)
+    let chat = await resolveChat(parsed, amoChannel.kind)
+
+    // Переписки нет вовсе: менеджер пишет первым тому, кто нам ещё
+    // не писал. С заявки известен только номер — по нему и находим
+    // человека в мессенджере и заводим переписку.
+    if (chat === null && parsed.receiverPhone !== '') {
+      const opened = await manager.openChatByPhone(
+        amoChannel.kind,
+        parsed.receiverPhone,
+        parsed.receiverName,
+      )
+      if (opened !== null) {
+        // Отвечать клиент будет в ту же беседу, что видит менеджер.
+        if (parsed.amoChatId !== '') {
+          await sql`
+            update chats set amo_started_chat_id = ${parsed.amoChatId}, updated_at = now()
+            where id = ${opened.chat_id}
+          `
+        }
+        chat = { ...opened, amo_chat_id: null }
+      }
+    }
+
     if (chat === null) return reply.code(200).send({ ok: true })
 
     const inserted = await sql<{ id: string }[]>`
@@ -494,6 +516,7 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       dbMessageId: row.id,
       channelId: chat.channel_id,
       externalChatId: chat.external_chat_id,
+      ...(parsed.receiverPhone !== '' ? { phone: parsed.receiverPhone } : {}),
       type: parsed.type,
       body: parsed.text,
       ...(parsed.media !== undefined ? { mediaPath: parsed.media } : {}),

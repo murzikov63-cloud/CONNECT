@@ -189,6 +189,56 @@ export class ChannelManager extends EventEmitter {
     return this.drivers.get(id)
   }
 
+  /**
+   * Заводит переписку с человеком, который нам ещё не писал, — по номеру
+   * телефона. Так менеджер может написать первым: с заявки мы знаем только
+   * номер, а мессенджер требует опознать собеседника.
+   *
+   * Возвращает null, если ни один номер нужного мессенджера не в сети или
+   * такого человека там нет (или он запретил находить себя по номеру).
+   */
+  async openChatByPhone(
+    kind: ChannelKind,
+    phone: string,
+    name: string,
+  ): Promise<{ chat_id: string; channel_id: string; external_chat_id: string } | null> {
+    const digits = phone.replace(/\D/g, '')
+    if (digits === '') return null
+
+    const channelId = [...this.drivers.entries()].find(
+      ([, d]) => d.kind === kind && d.isReady() && d.findChatByPhone !== undefined,
+    )?.[0]
+    if (channelId === undefined) {
+      logger.warn({ kind }, 'некому написать первым: подходящий номер не в сети')
+      return null
+    }
+
+    const driver = this.drivers.get(channelId)
+    const externalChatId = await driver?.findChatByPhone?.(digits).catch((err: unknown) => {
+      logger.error({ err, kind }, 'поиск собеседника по номеру не удался')
+      return null
+    })
+    if (externalChatId === null || externalChatId === undefined || externalChatId === '') {
+      logger.warn({ kind, phone: digits }, 'собеседник по номеру не найден')
+      return null
+    }
+
+    const rows = await sql<{ id: string }[]>`
+      insert into chats (channel_id, external_chat_id, phone, push_name)
+      values (${channelId}, ${externalChatId}, ${digits}, ${name === '' ? null : name})
+      on conflict (channel_id, external_chat_id) do update set
+        phone = coalesce(chats.phone, excluded.phone),
+        push_name = coalesce(chats.push_name, excluded.push_name),
+        updated_at = now()
+      returning id::text as id
+    `
+    const chatId = rows[0]?.id
+    if (chatId === undefined) return null
+
+    logger.info({ kind, chatId, externalChatId }, 'переписка заведена по номеру телефона')
+    return { chat_id: chatId, channel_id: channelId, external_chat_id: externalChatId }
+  }
+
   async getQr(id: string): Promise<string | null> {
     const rows = await sql<{ last_qr: string | null }[]>`
       select last_qr from channels where id = ${id}

@@ -21,6 +21,9 @@ export const Api = core.Api
 export const StringSession = sessions.StringSession
 export const NewMessage = events.NewMessage
 export const RPCError = errors.RPCError
+// Телеграм считает идентификаторы длинными числами, которые не помещаются
+// в обычный тип: библиотека ждёт именно эти объекты.
+export const bigInt = require('big-integer') as (value: number | string) => unknown
 
 export type TgClient = any
 export type TgMessage = any

@@ -367,6 +367,23 @@ async def send_message(request: web.Request) -> web.Response:
     return web.json_response({"messageId": str(getattr(msg, "id", ""))})
 
 
+def dialog_id(session: Session, user_id: int) -> int:
+    """
+    Номер личной переписки в MAX.
+
+    Отдельного «создать диалог» здесь нет: номер переписки двух людей
+    считается из их собственных номеров, и по нему сразу можно писать,
+    даже если разговора ещё не было. Правило взято из самой библиотеки
+    (UserService.get_chat_id); если она его поменяет — спросим её.
+    """
+    client = session.client
+    own = int(session.user_id or 0)
+    getter = getattr(client, "get_chat_id", None)
+    if callable(getter):
+        return int(getter(user_id, own))
+    return user_id ^ own
+
+
 async def search_phone(request: web.Request) -> web.Response:
     """Найти собеседника по номеру — чтобы менеджер мог написать первым."""
     check_secret(request)
@@ -378,7 +395,11 @@ async def search_phone(request: web.Request) -> web.Response:
     if user is None:
         return web.json_response({"found": False})
     uid = getattr(user, "id", None) or getattr(getattr(user, "contact", None), "id", None)
-    return web.json_response({"found": True, "userId": str(uid or "")})
+    if uid is None or not session.user_id:
+        return web.json_response({"found": False})
+    return web.json_response(
+        {"found": True, "userId": str(uid), "chatId": str(dialog_id(session, int(uid)))}
+    )
 
 
 async def stop_channel(request: web.Request) -> web.Response:

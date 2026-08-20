@@ -5,6 +5,7 @@ import type { ChannelDriver } from '../channels/types.js'
 import { config } from '../config/index.js'
 import { log } from '../logger/index.js'
 import type { InboundMessage, MessageType, OutboundMessage } from '../types.js'
+import { absoluteMediaPath, extForMime, saveMedia } from '../wa/media.js'
 
 /**
  * Канал мессенджера MAX.
@@ -37,6 +38,18 @@ export interface MaxIncoming {
 }
 
 const POLL_MS = 2000
+
+/**
+ * Приводит время сообщения MAX к миллисекундам.
+ *
+ * Значения меньше десяти миллиардов — это секунды: столько миллисекунд
+ * прошло бы лишь к 1970 году с небольшим, а такого времени у сообщений
+ * не бывает.
+ */
+export function msFromMaxTime(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return Date.now()
+  return value < 1e10 ? value * 1000 : value
+}
 
 export class MaxDriver extends EventEmitter implements ChannelDriver {
   readonly kind = 'max' as const
@@ -151,16 +164,42 @@ export class MaxDriver extends EventEmitter implements ChannelDriver {
       type: payload.type as MessageType,
       body: payload.text,
       ...(payload.media !== null ? { media: payload.media } : {}),
-      occurredAt: new Date(
-        (payload.occurredAt > 0 ? payload.occurredAt : Math.floor(Date.now() / 1000)) * 1000,
-      ),
+      // MAX отсчитывает время в миллисекундах, а не в секундах. Если
+      // умножить его ещё раз на тысячу, получается пятьдесят восьмое
+      // тысячелетие, и база отказывается такое принимать — входящее
+      // теряется целиком. Отличаем одно от другого по величине.
+      occurredAt: new Date(msFromMaxTime(payload.occurredAt)),
     }
     this.emit('inbound', msg)
+  }
+
+  /**
+   * Готовит вложение к отправке.
+   *
+   * Служба MAX умеет отправлять только файл с диска: ей нужно знать его
+   * размер. amoCRM же присылает ссылку. Поэтому файл по ссылке сначала
+   * скачиваем в общий том — служба видит его по тому же пути, что и мы.
+   */
+  private async localFile(out: OutboundMessage): Promise<string | undefined> {
+    const path = out.mediaPath
+    if (path === undefined || path === '') return undefined
+    if (!path.startsWith('http')) return absoluteMediaPath(path)
+
+    const response = await fetch(path)
+    if (!response.ok) {
+      throw new Error(`вложение не скачалось из amoCRM: HTTP ${response.status}`)
+    }
+    const mime = out.mediaMime ?? response.headers.get('content-type') ?? 'application/octet-stream'
+    const buffer = Buffer.from(await response.arrayBuffer())
+    const name = out.mediaName ?? `вложение.${extForMime(mime)}`
+    const saved = await saveMedia(this.channelId, `out-${Date.now()}`, buffer, mime, name)
+    return absoluteMediaPath(saved.path)
   }
 
   async send(out: OutboundMessage): Promise<string> {
     if (this.status !== 'online') throw new Error(`Канал ${this.label} не в сети`)
 
+    const filePath = await this.localFile(out)
     const result = await this.bridge<{ messageId: string }>('POST', '/send', {
       chatId: out.externalChatId,
       text: out.body === '' ? null : out.body,
@@ -168,22 +207,27 @@ export class MaxDriver extends EventEmitter implements ChannelDriver {
       ...(out.quotedExternalMessageId !== undefined
         ? { replyTo: out.quotedExternalMessageId }
         : {}),
-      ...(out.mediaPath !== undefined ? { filePath: out.mediaPath } : {}),
+      ...(filePath !== undefined ? { filePath } : {}),
       ...(out.mediaName !== undefined ? { fileName: out.mediaName } : {}),
     })
     if (result.messageId === '') throw new Error('MAX не вернул номер отправленного сообщения')
     return result.messageId
   }
 
-  /** Ищет собеседника по телефону — чтобы менеджер мог написать первым. */
-  async findByPhone(phone: string): Promise<string | null> {
+  /**
+   * Ищет собеседника по телефону — чтобы менеджер мог написать первым.
+   * Возвращает номер переписки, а не номер человека: писать в MAX нужно
+   * именно в переписку, и для личного разговора она существует всегда,
+   * даже если он ещё не начинался.
+   */
+  async findChatByPhone(phone: string): Promise<string | null> {
     const digits = phone.replace(/\D/g, '')
     if (digits === '') return null
-    const res = await this.bridge<{ found: boolean; userId: string }>(
+    const res = await this.bridge<{ found: boolean; chatId?: string }>(
       'GET',
       `/search?phone=${encodeURIComponent(digits)}`,
     )
-    return res.found ? res.userId : null
+    return res.found && res.chatId !== undefined && res.chatId !== '' ? res.chatId : null
   }
 
   isReady(): boolean {

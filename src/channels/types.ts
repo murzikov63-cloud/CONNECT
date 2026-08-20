@@ -51,6 +51,14 @@ export interface ChannelDriver extends EventEmitter {
 
   /** Аватар собеседника, если мессенджер его отдаёт. */
   fetchAvatar?(externalChatId: string): Promise<string | null>
+
+  /**
+   * Находит собеседника по номеру телефона — чтобы менеджер мог написать
+   * первым тому, кто нам ещё не писал. Возвращает идентификатор переписки
+   * в мессенджере или null, если такого пользователя нет либо он запретил
+   * находить себя по номеру.
+   */
+  findChatByPhone?(phone: string): Promise<string | null>
 }
 
 /**
