@@ -479,6 +479,16 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       return reply.code(200).send({ ok: true })
     }
 
+    // Запоминаем, кем amoCRM подписывает ответы менеджера: этим же именем
+    // потом подписываем сообщения, отправленные с телефона.
+    if (parsed.senderRefId !== '') {
+      const known = (await getSettings()).amoSenderRefId
+      if (known !== parsed.senderRefId) {
+        await saveSettings({ amoSenderRefId: parsed.senderRefId })
+        logger.info({ senderRefId: parsed.senderRefId }, 'запомнил отправителя amoCRM')
+      }
+    }
+
     let chat = await resolveChat(parsed, amoChannel.kind)
 
     // Переписки нет вовсе: менеджер пишет первым тому, кто нам ещё

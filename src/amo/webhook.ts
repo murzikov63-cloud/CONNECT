@@ -101,6 +101,8 @@ export interface OutgoingFromAmo {
    */
   receiverPhone: string
   receiverName: string
+  /** Пользователь amoCRM, от чьего имени пришёл ответ. */
+  senderRefId: string
   type: MessageType
   text: string
   media?: string
@@ -134,6 +136,7 @@ export function parseOutgoing(body: any): OutgoingFromAmo | null {
     amoMessageId,
     receiverPhone: String(receiver.phone ?? '').replace(/\D/g, ''),
     receiverName: String(receiver.name ?? ''),
+    senderRefId: String(m?.sender?.id ?? ''),
     type: fromAmoType(inner?.type),
     text: inner?.text ?? '',
   }

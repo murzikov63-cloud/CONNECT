@@ -16,6 +16,13 @@ export interface Settings {
   /** Воронка и этап для новых лидов; null — «Неразобранное». */
   amoPipelineId: number | null
   amoStatusId: number | null
+  /**
+   * Кем в amoCRM подписаны сообщения, отправленные менеджером прямо
+   * из мессенджера. Свой выдуманный отправитель amoCRM не принимает —
+   * нужна ссылка на её собственного пользователя. Этот идентификатор она
+   * присылает в каждом вебхуке, поэтому запоминаем его сами.
+   */
+  amoSenderRefId: string | null
 }
 
 const DEFAULTS = (): Settings => ({
@@ -28,6 +35,7 @@ const DEFAULTS = (): Settings => ({
   replyDelayMaxMs: config.REPLY_DELAY_MAX_MS,
   amoPipelineId: null,
   amoStatusId: null,
+  amoSenderRefId: null,
 })
 
 const KEY = 'app'

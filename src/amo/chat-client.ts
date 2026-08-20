@@ -148,7 +148,7 @@ export interface SendMessageInput {
   conversationRefId?: string
   msgid: string
   /** Кто отправил: клиент — для входящих, наш аккаунт — для исходящих. */
-  sender: AmoUser
+  sender: AmoUser | { ref_id: string }
   /**
    * Кому. Заполняется только для исходящих: по паре «отправитель —
    * получатель» amoCRM понимает, что сообщение от бизнеса, а не от клиента,

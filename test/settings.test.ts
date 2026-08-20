@@ -13,6 +13,7 @@ const settings = (personal: string[]): Settings => ({
   replyDelayMaxMs: 1500,
   amoPipelineId: null,
   amoStatusId: null,
+  amoSenderRefId: null,
 })
 
 describe('normalizePhone', () => {

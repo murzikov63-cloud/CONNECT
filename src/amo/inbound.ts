@@ -1,4 +1,4 @@
-import { Worker } from 'bullmq'
+import { UnrecoverableError, Worker } from 'bullmq'
 import type { Job } from 'bullmq'
 import { alert } from '../alerts/index.js'
 import { sql } from '../db/index.js'
@@ -8,7 +8,7 @@ import type { InboundJob } from '../queue/index.js'
 import { getSettings } from '../settings.js'
 import { mediaUrl } from '../wa/media.js'
 import { channelForKind } from './channels.js'
-import { createChat, sendMessageToAmo, toAmoType } from './chat-client.js'
+import { AmoChatError, createChat, sendMessageToAmo, toAmoType } from './chat-client.js'
 import type { AmoUser } from './chat-client.js'
 import {
   createContact,
@@ -62,14 +62,16 @@ function conversationId(row: Row): string {
 }
 
 /**
- * Наш аккаунт как отправитель. Нужен для сообщений, которые менеджер
- * отправил прямо из WhatsApp или Телеграма на телефоне, минуя amoCRM.
+ * Отправитель для сообщений, которые менеджер написал прямо из мессенджера
+ * на телефоне, минуя amoCRM.
+ *
+ * Выдуманного отправителя amoCRM не принимает: в беседе может быть только
+ * один посторонний человек — клиент. Второй должен быть её собственным
+ * пользователем, указанным ссылкой. Этот идентификатор amoCRM присылает
+ * нам в каждом ответе менеджера, оттуда мы его и запоминаем.
  */
-function buildBusinessUser(row: Row): AmoUser {
-  return {
-    id: `${row.channel_kind}-me-${row.channel_label}`,
-    name: row.channel_label,
-  }
+function buildBusinessUser(senderRefId: string): { ref_id: string } {
+  return { ref_id: senderRefId }
 }
 
 /** Имя клиента как есть — им называется карточка контакта в amoCRM. */
@@ -171,6 +173,22 @@ async function ensureAmoEntities(row: Row): Promise<{ amoChatId: string }> {
   return { amoChatId }
 }
 
+/**
+ * Отправка с одним отличием: отказ «не по формату» повторять бессмысленно.
+ * Тем же телом мы получим тот же отказ пять раз подряд и задержим очередь,
+ * в которой ждут живые сообщения.
+ */
+async function sendToAmo(
+  ...args: Parameters<typeof sendMessageToAmo>
+): Promise<Awaited<ReturnType<typeof sendMessageToAmo>>> {
+  try {
+    return await sendMessageToAmo(...args)
+  } catch (err) {
+    if (err instanceof AmoChatError && err.status === 400) throw new UnrecoverableError(err.message)
+    throw err
+  }
+}
+
 export function createInboundWorker(): Worker<InboundJob> {
   const worker = new Worker<InboundJob>(
     QUEUE_INBOUND,
@@ -193,12 +211,26 @@ export function createInboundWorker(): Worker<InboundJob> {
       // для исходящих отправитель — мы, получатель — клиент.
       const isOutgoing = row.direction === 'out'
       const client = buildSender(row)
+      const settings = await getSettings()
+      const senderRefId = settings.amoSenderRefId
 
-      const result = await sendMessageToAmo(channelForKind(row.channel_kind as never), {
+      // Пока менеджер ни разу не отвечал из amoCRM, подписать его сообщение
+      // нечем. Показать его в карточке не выйдет, но и держать сообщение
+      // в очереди бессмысленно: клиентские сообщения важнее, а это придёт
+      // в следующий раз, когда идентификатор станет известен.
+      if (isOutgoing && (senderRefId === null || senderRefId === '')) {
+        logger.info(
+          { messageId: row.message_id },
+          'сообщение менеджера с телефона пропущено: amoCRM ещё не назвала отправителя',
+        )
+        return
+      }
+
+      const result = await sendToAmo(channelForKind(row.channel_kind as never), {
         conversationId: conversationId(row),
         ...(startedChatId === null ? {} : { conversationRefId: startedChatId }),
         msgid: `msg-${row.message_id}`,
-        sender: isOutgoing ? buildBusinessUser(row) : client,
+        sender: isOutgoing ? buildBusinessUser(senderRefId as string) : client,
         ...(isOutgoing ? { receiver: client } : {}),
         // Своё же отправленное не должно дёргать менеджера уведомлением.
         silent: isOutgoing,
