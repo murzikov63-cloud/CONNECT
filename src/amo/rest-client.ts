@@ -49,16 +49,35 @@ export interface AmoContact {
   name: string
 }
 
-/** Ищет контакт по телефону. Пустой телефон — сразу null, без запроса. */
+/**
+ * Ищет контакт по телефону. Пустой телефон — сразу null, без запроса.
+ *
+ * Искать приходится в двух видах. amoCRM сопоставляет номер как строку:
+ * запрос «79660388883» не находит карточку, где записано «9660388883».
+ * С сайта номер приходит в местном виде, из мессенджера — всегда
+ * в международном, и без второй попытки на одного человека заводится
+ * второй контакт, а под него — вторая сделка. Проверено живьём.
+ *
+ * Вторая попытка — последние десять цифр, то есть номер без кода страны.
+ * Это верно для российских номеров; для иностранных вторая попытка просто
+ * ничего не найдёт.
+ */
 export async function findContactByPhone(phone: string): Promise<AmoContact | null> {
   const digits = phone.replace(/\D/g, '')
   if (digits === '') return null
 
-  const res = await request<{ _embedded?: { contacts?: AmoContact[] } }>(
-    'GET',
-    `/api/v4/contacts?query=${encodeURIComponent(digits)}&limit=1`,
-  )
-  return res._embedded?.contacts?.[0] ?? null
+  const national = digits.slice(-10)
+  const variants = national !== digits && national.length === 10 ? [digits, national] : [digits]
+
+  for (const query of variants) {
+    const res = await request<{ _embedded?: { contacts?: AmoContact[] } }>(
+      'GET',
+      `/api/v4/contacts?query=${encodeURIComponent(query)}&limit=1`,
+    )
+    const found = res._embedded?.contacts?.[0]
+    if (found !== undefined) return found
+  }
+  return null
 }
 
 export async function createContact(name: string, phone: string): Promise<AmoContact> {
