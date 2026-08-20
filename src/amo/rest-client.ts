@@ -198,6 +198,17 @@ export async function subscribeWebhook(destination: string, settings: string[]):
   logger.info({ destination, settings }, 'подписка на события amoCRM оформлена')
 }
 
+/** Жива ли ещё карточка контакта. Удалённая отвечает «не найдено». */
+export async function contactExists(contactId: number): Promise<boolean> {
+  try {
+    await request('GET', `/api/v4/contacts/${contactId}`)
+    return true
+  } catch (err) {
+    if (err instanceof AmoRestError && (err.status === 404 || err.status === 204)) return false
+    throw err
+  }
+}
+
 export async function checkConnection(): Promise<{ id: number; name: string }> {
   return request('GET', '/api/v4/account')
 }

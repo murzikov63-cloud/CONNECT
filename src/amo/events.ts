@@ -6,6 +6,7 @@ import type { ChannelKind } from '../channels/types.js'
 import { channelForKind } from './channels.js'
 import { createChat } from './chat-client.js'
 import {
+  contactExists,
   contactPhones,
   leadContactIds,
   linkChatToContact,
@@ -150,9 +151,22 @@ async function openOne(
   let linked = await linkChatToContact(contactId, created.id)
 
   if (!linked) {
-    // Беседа висит на другой карточке — обычно на удалённой. Перевесить
-    // amoCRM не даёт, поэтому заводим новую под другим именем: старая
-    // остаётся при своей карточке, а переписка продолжается в новой.
+    // Беседа висит на другой карточке. Заводить новую можно только если
+    // той карточки больше нет: иначе один и тот же человек, заведённый
+    // в amoCRM дважды, перетягивает переписку туда-сюда, и на каждое
+    // событие появляется ещё одна беседа. Проверено живьём — за минуту
+    // их набралось четыре.
+    const previous = row?.amo_contact_id
+    if (previous != null && (await contactExists(Number(previous)))) {
+      logger.info(
+        { kind, chatId: opened.chat_id, карточка: previous },
+        'переписка уже в другой карточке этого человека, оставляю там',
+      )
+      return
+    }
+
+    // Прежней карточки нет — переписка осиротела. Заводим беседу заново
+    // под другим именем: старая остаётся при удалённой карточке.
     key = `${kind}-${opened.chat_id}-${counter()}`
     created = await createChat(channel, key, user)
     linked = await linkChatToContact(contactId, created.id)
