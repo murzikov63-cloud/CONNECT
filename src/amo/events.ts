@@ -34,6 +34,16 @@ function counter(): number {
   return Math.floor(Date.now() / 1000)
 }
 
+/**
+ * Контакты, которыми занимаемся прямо сейчас.
+ *
+ * О новом человеке amoCRM сообщает дважды — отдельно про контакт и про
+ * сделку, — и события приходят в одну секунду. Без этой отметки вся работа
+ * делается дважды: второй заход не видит следов первого, потому что тот
+ * ещё не закончил.
+ */
+const вРаботе = new Set<number>()
+
 /** Адрес, по которому amoCRM сообщает о событиях. Тайна — в самом адресе. */
 export function eventsPath(secret: string = config.AMO_EVENTS_SECRET): string {
   return `/amo-events/${secret}`
@@ -79,6 +89,19 @@ export async function openChatsForContact(
   manager: ChannelManager,
   contactId: number,
 ): Promise<void> {
+  if (вРаботе.has(contactId)) {
+    logger.info({ contactId }, 'этим контактом уже занимаемся, второй заход пропускаю')
+    return
+  }
+  вРаботе.add(contactId)
+  try {
+    await openChats(manager, contactId)
+  } finally {
+    вРаботе.delete(contactId)
+  }
+}
+
+async function openChats(manager: ChannelManager, contactId: number): Promise<void> {
   const { name, phones } = await contactPhones(contactId)
   if (phones.length === 0) {
     logger.info({ contactId }, 'у контакта нет телефона, писать некуда')
