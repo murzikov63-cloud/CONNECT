@@ -491,7 +491,17 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       }
     }
 
-    if (chat === null) return reply.code(200).send({ ok: true })
+    if (chat === null) {
+      // Вот теперь это потеря: менеджер написал, а мы не смогли доставить.
+      logger.warn(
+        {
+          мессенджер: amoChannel.kind,
+          телефонПолучателя: parsed.receiverPhone === '' ? 'нет' : 'есть',
+        },
+        'сообщение менеджера некуда доставить',
+      )
+      return reply.code(200).send({ ok: true })
+    }
 
     const inserted = await sql<{ id: string }[]>`
       insert into messages (

@@ -225,14 +225,16 @@ export async function resolveChat(
     }
   }
 
-  logger.warn(
+  // Не тревога: следом попробуем найти человека по телефону и завести
+  // переписку. Тревожиться будем, если и это не выйдет.
+  logger.info(
     {
       amoChatId: parsed.amoChatId,
       conversationClientId: parsed.conversationClientId,
       телефонПолучателя: parsed.receiverPhone === '' ? 'нет' : 'есть',
       мессенджер: kind,
     },
-    'не нашёл переписку, к которой относится ответ менеджера',
+    'готовой переписки нет',
   )
   return null
 }
