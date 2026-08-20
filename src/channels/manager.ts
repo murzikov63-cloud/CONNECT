@@ -69,6 +69,17 @@ export class ChannelManager extends EventEmitter {
   private readonly selfSent = new Map<string, number>()
   private static readonly SELF_SENT_TTL_MS = 10 * 60 * 1000
 
+  /**
+   * Отложенные оповещения об отвалившемся номере.
+   *
+   * Короткий разрыв — обычное дело: перезапуск службы, моргнувшая сеть.
+   * Переподключение занимает секунды, и оповещение о нём — шум, из-за
+   * которого перестают читать все остальные. Поэтому ждём: если через
+   * минуту с небольшим номер всё ещё не в сети — вот тогда это авария.
+   */
+  private readonly offlineAlerts = new Map<string, NodeJS.Timeout>()
+  private static readonly OFFLINE_ALERT_DELAY_MS = 90 * 1000
+
   markSelfSent(channelId: string, externalMessageId: string): void {
     const now = Date.now()
     this.selfSent.set(`${channelId}:${externalMessageId}`, now)
@@ -233,6 +244,14 @@ export class ChannelManager extends EventEmitter {
       where id = ${channelId}
     `
 
+    if (status !== 'offline') {
+      const pending = this.offlineAlerts.get(channelId)
+      if (pending !== undefined) {
+        clearTimeout(pending)
+        this.offlineAlerts.delete(channelId)
+      }
+    }
+
     if (status === 'logged_out') {
       await clearAuthState(channelId)
       await alert('error', `Номер «${label}» разлогинен`, {
@@ -245,13 +264,33 @@ export class ChannelManager extends EventEmitter {
         Действие: 'переводим переписку на резервный номер',
       })
     } else if (status === 'offline') {
-      await alert('warn', `Номер «${label}» отвалился`, {
-        Причина: extra.reason ?? '—',
-        Действие: 'переподключаюсь автоматически',
-      })
+      this.scheduleOfflineAlert(channelId, label, extra.reason)
     } else if (status === 'online') {
       logger.info({ channelId, phone: extra.phone }, 'номер в сети')
     }
+  }
+
+  /** Оповещает об отвалившемся номере, только если он не вернулся сам. */
+  private scheduleOfflineAlert(channelId: string, label: string, reason?: string): void {
+    if (this.offlineAlerts.has(channelId)) return
+
+    const timer = setTimeout(() => {
+      this.offlineAlerts.delete(channelId)
+      void (async () => {
+        const rows = await sql<{ status: ChannelStatus }[]>`
+          select status from channels where id = ${channelId}
+        `
+        if (rows[0]?.status !== 'offline') return
+        await alert('warn', `Номер «${label}» не в сети`, {
+          Причина: reason ?? '—',
+          'Не в сети': 'больше полутора минут, переподключение продолжается',
+        })
+      })().catch((err: unknown) => logger.error({ err, channelId }, 'не удалось оповестить'))
+    }, ChannelManager.OFFLINE_ALERT_DELAY_MS)
+
+    // Таймер не должен удерживать процесс при остановке сервиса.
+    timer.unref()
+    this.offlineAlerts.set(channelId, timer)
   }
 
   private async onInbound(msg: InboundMessage): Promise<void> {

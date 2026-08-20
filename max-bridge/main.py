@@ -27,6 +27,12 @@ from pymax import WebClient
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("max-bridge")
 
+# Номера событий протокола MAX. Нужны только для разбора «что именно пришло»:
+# библиотека молча пропускает кадр, который не смогла разобрать, поэтому
+# считаем кадры сами.
+OPCODE_PING = 1
+OPCODE_NOTIF_MESSAGE = 128
+
 APP_URL = os.environ.get("APP_URL", "http://app:3000")
 BRIDGE_SECRET = os.environ.get("BRIDGE_SECRET", "")
 MEDIA_DIR = Path(os.environ.get("MEDIA_DIR", "/app/media"))
@@ -47,6 +53,10 @@ class Session:
     stopping: bool = False
     raw_events: int = 0
     messages_seen: int = 0
+    notifs_seen: int = 0
+    unparsed_notifs: int = 0
+    last_notif_at: float = 0.0
+    opcodes: dict[str, int] = field(default_factory=dict)
     last_event_at: float = field(default_factory=time.time)
     reconnects: int = 0
     started_at: float = field(default_factory=time.time)
@@ -191,6 +201,38 @@ def make_client(session: Session) -> WebClient:
         session.raw_events += 1
         session.last_event_at = time.time()
 
+        opcode = getattr(frame, "opcode", None)
+        if opcode == OPCODE_PING:
+            return
+        session.opcodes[str(opcode)] = session.opcodes.get(str(opcode), 0) + 1
+        if opcode != OPCODE_NOTIF_MESSAGE:
+            return
+
+        # Сюда мы попадаем ровно тогда, когда MAX сообщил о новом сообщении.
+        # Если следом не сработал обработчик — виновата не связь, а разбор
+        # кадра библиотекой. Различить эти два случая иначе нельзя: библиотека
+        # о неудачном разборе не сообщает.
+        session.notifs_seen += 1
+        session.last_notif_at = time.time()
+        payload = getattr(frame, "payload", None) or {}
+        log.info(
+            "канал %s: MAX сообщил о новом сообщении (#%s), поля кадра: %s",
+            session.channel_id,
+            session.notifs_seen,
+            ",".join(sorted(payload)) if isinstance(payload, dict) else type(payload).__name__,
+        )
+        try:
+            from pymax.types import Message as MaxMessage
+
+            MaxMessage.model_validate(payload)
+        except Exception as err:  # noqa: BLE001
+            session.unparsed_notifs += 1
+            log.error(
+                "канал %s: библиотека не смогла разобрать кадр, сообщение потеряно: %s",
+                session.channel_id,
+                str(err)[:400],
+            )
+
     @client.on_disconnect()
     async def _on_disconnect(c: WebClient) -> None:  # type: ignore[misc]
         if not session.stopping:
@@ -286,6 +328,12 @@ async def status_channel(request: web.Request) -> web.Response:
             "error": session.error,
             "rawEvents": session.raw_events,
             "messagesSeen": session.messages_seen,
+            "notifsSeen": session.notifs_seen,
+            "unparsedNotifs": session.unparsed_notifs,
+            "lastNotifAgoSec": (
+                round(time.time() - session.last_notif_at) if session.last_notif_at else None
+            ),
+            "opcodes": session.opcodes,
             "silenceSec": round(time.time() - session.last_event_at),
             "reconnects": session.reconnects,
         }
@@ -424,6 +472,8 @@ async def health(_: web.Request) -> web.Response:
                     "status": s.status,
                     "silenceSec": round(time.time() - s.last_event_at),
                     "messagesSeen": s.messages_seen,
+                    "notifsSeen": s.notifs_seen,
+                    "unparsedNotifs": s.unparsed_notifs,
                     "reconnects": s.reconnects,
                 }
                 for c, s in sessions.items()
