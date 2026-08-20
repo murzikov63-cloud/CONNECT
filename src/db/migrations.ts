@@ -138,4 +138,16 @@ export const migrations: Migration[] = [
       create index if not exists channels_kind_idx on channels (kind);
     `,
   },
+  {
+    name: '003_amo_started_chat',
+    sql: `
+      -- Когда менеджер пишет из карточки, в которой переписки ещё не было,
+      -- amoCRM заводит свою беседу — с идентификатором, которого мы не
+      -- знали. Ответ клиента нужно класть именно в неё: иначе он попадёт
+      -- в отдельную беседу, а amoCRM заведёт под неё вторую сделку.
+      -- Колонка была заведена в самом начале и ни разу не использовалась,
+      -- поэтому просто даём ей верное имя.
+      alter table chats rename column amo_conversation to amo_started_chat_id;
+    `,
+  },
 ]

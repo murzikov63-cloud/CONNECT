@@ -36,6 +36,7 @@ interface Row {
   push_name: string | null
   avatar_url: string | null
   amo_chat_id: string | null
+  amo_started_chat_id: string | null
   amo_contact_id: string | null
   amo_lead_id: string | null
   channel_kind: string
@@ -102,7 +103,8 @@ async function loadRow(messageId: string): Promise<Row | null> {
            m.occurred_at, m.sender_name,
            c.id::text            as chat_id,
            c.external_chat_id, c.phone as chat_phone, c.push_name, c.avatar_url,
-           c.amo_chat_id, c.amo_contact_id::text as amo_contact_id,
+           c.amo_chat_id, c.amo_started_chat_id,
+           c.amo_contact_id::text as amo_contact_id,
            c.amo_lead_id::text   as amo_lead_id,
            ch.kind               as channel_kind,
            ch.label              as channel_label
@@ -175,7 +177,11 @@ export function createInboundWorker(): Worker<InboundJob> {
         return
       }
 
-      await ensureAmoEntities(row)
+      // Беседа, которую завела amoCRM, уже привязана к нужной карточке —
+      // своих чат, контакт и сделку заводить не нужно и вредно: получится
+      // второй контакт с тем же телефоном и лишняя сделка.
+      const startedChatId = row.amo_started_chat_id
+      if (startedChatId === null) await ensureAmoEntities(row)
 
       // Менеджер вполне может ответить прямо с телефона, минуя amoCRM.
       // Такие сообщения тоже должны быть в карточке, иначе там будет
@@ -186,6 +192,7 @@ export function createInboundWorker(): Worker<InboundJob> {
 
       const result = await sendMessageToAmo(channelForKind(row.channel_kind as never), {
         conversationId: conversationId(row),
+        ...(startedChatId === null ? {} : { conversationRefId: startedChatId }),
         msgid: `msg-${row.message_id}`,
         sender: isOutgoing ? buildBusinessUser(row) : client,
         ...(isOutgoing ? { receiver: client } : {}),

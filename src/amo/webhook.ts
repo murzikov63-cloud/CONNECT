@@ -147,6 +147,7 @@ export interface ResolvedChat {
   chat_id: string
   channel_id: string
   external_chat_id: string
+  amo_chat_id: string | null
 }
 
 /**
@@ -157,11 +158,14 @@ export async function resolveChat(
   parsed: OutgoingFromAmo,
   kind: string,
 ): Promise<ResolvedChat | null> {
-  // Сначала по идентификатору чата amoCRM — он записан у нас при создании.
+  // Сначала по идентификатору чата amoCRM. Их у переписки может быть два:
+  // наш, заведённый на первое входящее, и тот, что amoCRM завела сама,
+  // когда менеджер написал первым.
   if (parsed.amoChatId !== '') {
     const rows = await sql<ResolvedChat[]>`
-      select id::text as chat_id, channel_id::text as channel_id, external_chat_id
-      from chats where amo_chat_id = ${parsed.amoChatId}
+      select id::text as chat_id, channel_id::text as channel_id, external_chat_id, amo_chat_id
+      from chats
+      where amo_chat_id = ${parsed.amoChatId} or amo_started_chat_id = ${parsed.amoChatId}
     `
     if (rows[0] !== undefined) return rows[0]
   }
@@ -170,7 +174,7 @@ export async function resolveChat(
   const match = /^[a-z]+-(\d+)$/.exec(parsed.conversationClientId)
   if (match !== null) {
     const rows = await sql<ResolvedChat[]>`
-      select id::text as chat_id, channel_id::text as channel_id, external_chat_id
+      select id::text as chat_id, channel_id::text as channel_id, external_chat_id, amo_chat_id
       from chats where id = ${match[1]!}
     `
     if (rows[0] !== undefined) return rows[0]
@@ -181,7 +185,8 @@ export async function resolveChat(
   // канал которого выбрал менеджер.
   if (parsed.receiverPhone !== '') {
     const rows = await sql<ResolvedChat[]>`
-      select c.id::text as chat_id, c.channel_id::text as channel_id, c.external_chat_id
+      select c.id::text as chat_id, c.channel_id::text as channel_id, c.external_chat_id,
+             c.amo_chat_id
       from chats c
       join channels ch on ch.id = c.channel_id
       where ch.kind = ${kind} and ch.deleted_at is null
@@ -191,13 +196,27 @@ export async function resolveChat(
     `
     const found = rows[0]
     if (found !== undefined) {
-      // Беседу amoCRM здесь НЕ запоминаем.
+      // Беседу amoCRM запоминаем отдельно, не подменяя свою.
       //
-      // Когда менеджер начинает разговор из карточки, amoCRM заводит свою
-      // беседу, не связанную с нашим conversation_id. Наша беседа — та,
-      // в которую ложатся входящие. Если подменить одну другой, входящие
-      // и исходящие разъедутся по двум разным беседам, и менеджер будет
-      // видеть половину разговора. Проверено на живой переписке.
+      // Менеджер пишет из карточки, где переписки ещё не было, — amoCRM
+      // заводит свою беседу и показывает её в этой самой карточке. Ответ
+      // клиента придёт к нам, и если положить его в нашу беседу, он
+      // окажется в другой карточке: в той, что amoCRM когда-то завела
+      // на входящее. Разговор разъедется надвое, а под ответ появится
+      // вторая сделка. Поэтому дальше пишем в беседу карточки.
+      //
+      // Подменять этим свой идентификатор нельзя: по нему мы узнаём
+      // переписку в других местах.
+      if (parsed.amoChatId !== '' && parsed.amoChatId !== found.amo_chat_id) {
+        await sql`
+          update chats set amo_started_chat_id = ${parsed.amoChatId}, updated_at = now()
+          where id = ${found.chat_id}
+        `
+        logger.info(
+          { chatId: found.chat_id, amoChatId: parsed.amoChatId },
+          'запомнил беседу, которую завела amoCRM',
+        )
+      }
       logger.info(
         { phone: parsed.receiverPhone, kind },
         'переписка найдена по телефону получателя',

@@ -140,6 +140,12 @@ export async function createChat(
 
 export interface SendMessageInput {
   conversationId: string
+  /**
+   * Беседа, которую завела сама amoCRM (менеджер написал первым из карточки).
+   * Если она известна — пишем в неё, а не в свою: иначе разговор разъедется
+   * на две карточки и amoCRM заведёт вторую сделку.
+   */
+  conversationRefId?: string
   msgid: string
   /** Кто отправил: клиент — для входящих, наш аккаунт — для исходящих. */
   sender: AmoUser
@@ -179,7 +185,9 @@ export async function sendMessageToAmo(
       timestamp: Math.floor(input.occurredAt.getTime() / 1000),
       msec_timestamp: input.occurredAt.getTime(),
       msgid: input.msgid,
-      conversation_id: input.conversationId,
+      ...(input.conversationRefId === undefined
+        ? { conversation_id: input.conversationId }
+        : { conversation_ref_id: input.conversationRefId }),
       sender: input.sender,
       ...(input.receiver !== undefined ? { receiver: input.receiver } : {}),
       message,
