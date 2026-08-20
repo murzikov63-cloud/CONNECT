@@ -140,8 +140,19 @@ export async function createLead(
  * Без этого сообщения уходят «в никуда»: чат существует, но не показан.
  */
 export async function linkChatToContact(contactId: number, amoChatId: string): Promise<void> {
-  await request('POST', '/api/v4/contacts/chats', [{ contact_id: contactId, chat_id: amoChatId }])
-  logger.info({ contactId, amoChatId }, 'чат привязан к контакту')
+  try {
+    await request('POST', '/api/v4/contacts/chats', [{ contact_id: contactId, chat_id: amoChatId }])
+    logger.info({ contactId, amoChatId }, 'чат привязан к контакту')
+  } catch (err) {
+    // Переписка уже висит на какой-то карточке. Перевесить её amoCRM
+    // не даёт, но это и не беда: сообщение всё равно видно там, где она
+    // висит. Ронять из-за этого доставку нельзя — иначе входящее будет
+    // вечно ходить по кругу повторов и в итоге потеряется.
+    const alreadyLinked =
+      err instanceof AmoRestError && err.status === 400 && err.message.includes('AlreadyExists')
+    if (!alreadyLinked) throw err
+    logger.info({ contactId, amoChatId }, 'переписка уже привязана, оставляю как есть')
+  }
 }
 
 /** Телефоны из карточки контакта — их может быть несколько. */
