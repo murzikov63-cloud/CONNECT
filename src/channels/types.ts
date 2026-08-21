@@ -25,6 +25,12 @@ export interface ChannelCapabilities {
   media: boolean
   voice: boolean
   quotes: boolean
+  /**
+   * Сообщает ли мессенджер сам, что сообщение дошло до собеседника.
+   * У Телеграма такого события нет вовсе: он отмечает только прочтение,
+   * а одна галочка означает лишь «принято сервером». MAX молчит и о том,
+   * и о другом.
+   */
   deliveryStatus: boolean
 }
 
@@ -90,7 +96,7 @@ export const CAPABILITIES: Record<ChannelKind, ChannelCapabilities> = {
     voice: true,
     quotes: true,
     // О прочтении Телеграм сообщает, о доставке отдельного события нет.
-    deliveryStatus: true,
+    deliveryStatus: false,
   },
   max: {
     // Подключается личным аккаунтом по QR, как Телеграм.

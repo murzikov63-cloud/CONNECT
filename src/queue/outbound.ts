@@ -91,6 +91,14 @@ export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJo
         `
       }
 
+      // Мессенджеры, которые о доставке молчат (Телеграм, MAX), иначе
+      // оставили бы менеджера с вечным «Отправлено».
+      if (!driver.capabilities.deliveryStatus) {
+        await manager
+          .markDelivered(out.channelId, externalMessageId)
+          .catch((err: unknown) => logger.warn({ err }, 'не удалось отметить доставку'))
+      }
+
       logger.info({ channelId: out.channelId, externalMessageId }, 'исходящее отправлено')
       return { externalMessageId }
     },
