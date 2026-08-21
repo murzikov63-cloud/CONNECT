@@ -220,12 +220,14 @@ export class MaxDriver extends EventEmitter implements ChannelDriver {
    * именно в переписку, и для личного разговора она существует всегда,
    * даже если он ещё не начинался.
    */
-  async findChatByPhone(phone: string): Promise<string | null> {
+  async findChatByPhone(phone: string, name = ''): Promise<string | null> {
     const digits = phone.replace(/\D/g, '')
     if (digits === '') return null
+    // Имя нужно, если номера ещё нет в контактах: MAX ищет прежде всего
+    // среди знакомых, поэтому номер приходится сначала добавить.
     const res = await this.bridge<{ found: boolean; chatId?: string }>(
       'GET',
-      `/search?phone=${encodeURIComponent(digits)}`,
+      `/search?phone=${encodeURIComponent(digits)}&name=${encodeURIComponent(name)}`,
     )
     return res.found && res.chatId !== undefined && res.chatId !== '' ? res.chatId : null
   }

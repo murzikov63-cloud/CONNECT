@@ -419,13 +419,48 @@ async def search_phone(request: web.Request) -> web.Response:
     session = sessions.get(request.match_info["cid"])
     if session is None or session.client is None or session.status != "online":
         raise web.HTTPServiceUnavailable(text="канал не в сети")
-    phone = request.query.get("phone", "")
-    try:
-        user = await session.client.search_by_phone(phone)
-    except Exception as err:  # noqa: BLE001
-        # «Такого человека нет» библиотека сообщает исключением. Для нас это
-        # обычный ответ: значит, в MAX его просто нет.
-        log.info("канал %s: по номеру никого нет (%s)", session.channel_id, str(err)[:120])
+    raw = request.query.get("phone", "")
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    name = request.query.get("name", "").strip()
+
+    async def try_search(value: str) -> Any:
+        try:
+            return await session.client.search_by_phone(value)
+        except Exception as err:  # noqa: BLE001
+            log.info("канал %s: по номеру %s никого (%s)",
+                     session.channel_id, value, str(err)[:100])
+            return None
+
+    # MAX ждёт международный формат. Без плюса поиск не находит даже тех,
+    # кто в мессенджере есть.
+    user = None
+    for value in (f"+{digits}", digits):
+        user = await try_search(value)
+        if user is not None:
+            break
+
+    # Не нашли — возможно, номера просто нет в наших контактах: MAX, как и
+    # другие мессенджеры, ищет прежде всего среди знакомых. Добавляем номер
+    # в контакты и пробуем снова.
+    if user is None and digits:
+        try:
+            from pymax.types.domain.user import ContactInfo
+
+            first, last = (name.split(" ", 1) + [""])[:2] if name else ("Клиент", "")
+            imported = await session.client.import_contacts(
+                [ContactInfo(phone=f"+{digits}", first_name=first or "Клиент", last_name=last)]
+            )
+            if imported:
+                user = imported[0]
+                log.info("канал %s: номер %s добавлен в контакты MAX",
+                         session.channel_id, digits)
+        except Exception as err:  # noqa: BLE001
+            log.info("канал %s: добавить контакт не вышло (%s)",
+                     session.channel_id, str(err)[:150])
+        if user is None:
+            user = await try_search(f"+{digits}")
+
+    if user is None:
         return web.json_response({"found": False})
     if user is None:
         return web.json_response({"found": False})

@@ -215,7 +215,7 @@ export class ChannelManager extends EventEmitter {
     }
 
     const driver = this.drivers.get(channelId)
-    const externalChatId = await driver?.findChatByPhone?.(digits).catch((err: unknown) => {
+    const externalChatId = await driver?.findChatByPhone?.(digits, name).catch((err: unknown) => {
       logger.error({ err, kind }, 'поиск собеседника по номеру не удался')
       return null
     })

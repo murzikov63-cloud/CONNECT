@@ -58,7 +58,7 @@ export interface ChannelDriver extends EventEmitter {
    * в мессенджере или null, если такого пользователя нет либо он запретил
    * находить себя по номеру.
    */
-  findChatByPhone?(phone: string): Promise<string | null>
+  findChatByPhone?(phone: string, name?: string): Promise<string | null>
 }
 
 /**
