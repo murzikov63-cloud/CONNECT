@@ -150,6 +150,14 @@ export class MaxDriver extends EventEmitter implements ChannelDriver {
   }
 
   /** Вызывается, когда служба принесла входящее сообщение. */
+  /** Собеседник прочитал переписку — MAX отмечает это временем. */
+  ingestRead(payload: { externalChatId: string; upToMs: number }): void {
+    this.emit('read-up-to-time', {
+      externalChatId: payload.externalChatId,
+      upToMs: payload.upToMs,
+    })
+  }
+
   ingest(payload: MaxIncoming): void {
     const msg: InboundMessage = {
       channelId: this.channelId,

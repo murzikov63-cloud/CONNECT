@@ -279,6 +279,12 @@ export class ChannelManager extends EventEmitter {
       )
     })
 
+    session.on('read-up-to-time', (u: { externalChatId: string; upToMs: number }) => {
+      void this.onReadUpToTime(channelId, u).catch((err: unknown) =>
+        logger.error({ err, channelId }, 'ошибка отметки о прочтении'),
+      )
+    })
+
     session.on('read-up-to', (u: { externalChatId: string; maxId: string }) => {
       void this.onReadUpTo(channelId, u).catch((err: unknown) =>
         logger.error({ err, channelId }, 'ошибка отметки о прочтении'),
@@ -496,6 +502,38 @@ export class ChannelManager extends EventEmitter {
         and m.status <> 'read'
         and m.external_message_id ~ '^[0-9]+$'
         and m.external_message_id::bigint <= ${u.maxId}::bigint
+      returning m.external_message_id
+    `
+    for (const row of rows) {
+      this.emit('delivery', {
+        channelId,
+        externalMessageId: row.external_message_id,
+        status: 'read' as DeliveryStatus,
+      })
+    }
+    if (rows.length > 0) {
+      logger.info({ channelId, count: rows.length }, 'собеседник прочитал сообщения')
+    }
+  }
+
+  /**
+   * То же, но отметка по времени, а не по номеру сообщения: так помечает
+   * прочитанное MAX.
+   */
+  private async onReadUpToTime(
+    channelId: string,
+    u: { externalChatId: string; upToMs: number },
+  ): Promise<void> {
+    const rows = await sql<{ external_message_id: string }[]>`
+      update messages m set status = 'read', read_at = coalesce(m.read_at, now())
+      from chats c
+      where c.id = m.chat_id
+        and m.channel_id = ${channelId}
+        and c.external_chat_id = ${u.externalChatId}
+        and m.direction = 'out'
+        and m.status <> 'read'
+        and m.external_message_id is not null
+        and m.occurred_at <= to_timestamp(${u.upToMs} / 1000.0)
       returning m.external_message_id
     `
     for (const row of rows) {

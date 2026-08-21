@@ -254,6 +254,39 @@ def make_client(session: Session) -> WebClient:
                 str(err)[:400],
             )
 
+    @client.on_message_read()
+    async def _on_read(event: Any, c: WebClient) -> None:  # type: ignore[misc]
+        """
+        Собеседник прочитал переписку.
+
+        MAX отмечает не отдельное сообщение, а время: «всё до этой минуты
+        прочитано». Ту же отметку он присылает, когда переписку читает наш
+        же менеджер с телефона, — такие пропускаем, иначе сервис решит,
+        что клиент прочёл, хотя тот и не открывал.
+        """
+        if getattr(event, "set_as_unread", False):
+            return
+        if str(getattr(event, "user_id", "")) == session.user_id:
+            return
+        chat_id = getattr(event, "chat_id", None)
+        mark = int(getattr(event, "mark", 0) or 0)
+        if chat_id is None or mark <= 0:
+            return
+        try:
+            async with aiohttp.ClientSession() as http:
+                await http.post(
+                    f"{APP_URL}/internal/max/read",
+                    json={
+                        "channelId": session.channel_id,
+                        "externalChatId": str(chat_id),
+                        "upToMs": mark,
+                    },
+                    headers={"X-Bridge-Secret": BRIDGE_SECRET},
+                    timeout=aiohttp.ClientTimeout(total=20),
+                )
+        except Exception as err:  # noqa: BLE001
+            log.warning("не смог передать отметку о прочтении: %s", err)
+
     @client.on_disconnect()
     async def _on_disconnect(*args: Any) -> None:  # type: ignore[misc]
         # Библиотека зовёт этот обработчик с тремя значениями

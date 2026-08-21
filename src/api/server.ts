@@ -424,6 +424,26 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     return { ok: true }
   })
 
+  /** Отметка о прочтении из MAX: «всё в переписке до этого времени». */
+  app.post<{ Body: { channelId: string; externalChatId: string; upToMs: number } }>(
+    '/internal/max/read',
+    async (req, reply) => {
+      if (config.BRIDGE_SECRET === '' || req.headers['x-bridge-secret'] !== config.BRIDGE_SECRET) {
+        return reply.code(401).send({ error: 'неверный ключ службы' })
+      }
+      const driver = manager.getDriver(req.body.channelId)
+      if (driver === undefined || driver.kind !== 'max') {
+        return reply.code(404).send({ error: 'канал не найден' })
+      }
+      const maxDriver = driver as unknown as MaxDriver
+      maxDriver.ingestRead({
+        externalChatId: req.body.externalChatId,
+        upToMs: Number(req.body.upToMs),
+      })
+      return { ok: true }
+    },
+  )
+
   // --- ответы менеджеров из amoCRM --------------------------------------
 
   /**
