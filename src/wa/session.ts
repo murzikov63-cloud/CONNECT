@@ -22,11 +22,21 @@ const RECONNECT_BASE_MS = 2_000
 const RECONNECT_MAX_MS = 60_000
 
 /** Коды из proto.WebMessageInfo.Status. */
+/**
+ * Числа, которыми WhatsApp обозначает судьбу сообщения. Взяты из самой
+ * библиотеки (`WebMessageInfo.Status`), а не подобраны: ошибка на единицу
+ * здесь означает, что менеджер видит «прочитано», когда клиент даже
+ * не открывал переписку.
+ *
+ *   0 — ошибка, 1 — в пути, 2 — принято сервером,
+ *   3 — доставлено собеседнику, 4 — прочитано, 5 — голосовое прослушано.
+ */
 const STATUS_BY_CODE: Record<number, DeliveryStatus> = {
   1: 'sent',
-  2: 'delivered',
-  3: 'read',
+  2: 'sent',
+  3: 'delivered',
   4: 'read',
+  5: 'read',
 }
 
 export interface SessionEvents {
