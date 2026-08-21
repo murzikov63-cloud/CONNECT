@@ -54,6 +54,7 @@ class Session:
     raw_events: int = 0
     messages_seen: int = 0
     notifs_seen: int = 0
+    chats_known: int = 0
     unparsed_notifs: int = 0
     last_notif_at: float = 0.0
     opcodes: dict[str, int] = field(default_factory=dict)
@@ -187,6 +188,26 @@ def make_client(session: Session) -> WebClient:
         session.phone = str(getattr(contact, "phone", "") or "")
         log.info("канал %s: MAX в сети (%s)", session.channel_id, session.phone or session.user_id)
 
+        # После переподключения список чатов приходит пустым, и MAX перестаёт
+        # присылать события по существующим перепискам: при первом входе
+        # клиент видел 40 чатов, после переподключения — ноль, и сообщения
+        # до нас не доходили. Поэтому список подтягиваем сами.
+        for attempt in range(1, 4):
+            try:
+                chats = await c.fetch_chats()
+                session.chats_known = len(list(chats))
+            except Exception as err:  # noqa: BLE001
+                session.chats_known = 0
+                log.warning("канал %s: не удалось получить список чатов: %s",
+                            session.channel_id, str(err)[:200])
+            if session.chats_known > 0:
+                log.info("канал %s: подписан на %s переписок",
+                         session.channel_id, session.chats_known)
+                break
+            log.warning("канал %s: список чатов пуст, попытка %s из 3",
+                        session.channel_id, attempt)
+            await asyncio.sleep(3)
+
     @client.on_message()
     async def _on_message(message: Any, c: WebClient) -> None:  # type: ignore[misc]
         try:
@@ -234,10 +255,17 @@ def make_client(session: Session) -> WebClient:
             )
 
     @client.on_disconnect()
-    async def _on_disconnect(c: WebClient) -> None:  # type: ignore[misc]
-        if not session.stopping:
-            session.status = "offline"
-            log.warning("канал %s: связь с MAX потеряна", session.channel_id)
+    async def _on_disconnect(*args: Any) -> None:  # type: ignore[misc]
+        # Библиотека зовёт этот обработчик с тремя значениями
+        # (ошибка, будет ли переподключение, задержка). Раньше он принимал
+        # одно, падал с TypeError на каждом разрыве — и канал так и оставался
+        # числиться в сети, хотя связи уже не было.
+        if session.stopping:
+            return
+        session.status = "offline"
+        reason = str(args[0])[:200] if args else ""
+        log.warning("канал %s: связь с MAX потеряна%s",
+                    session.channel_id, f" ({reason})" if reason else "")
 
     return client
 
@@ -329,6 +357,7 @@ async def status_channel(request: web.Request) -> web.Response:
             "rawEvents": session.raw_events,
             "messagesSeen": session.messages_seen,
             "notifsSeen": session.notifs_seen,
+            "chatsKnown": session.chats_known,
             "unparsedNotifs": session.unparsed_notifs,
             "lastNotifAgoSec": (
                 round(time.time() - session.last_notif_at) if session.last_notif_at else None
@@ -500,6 +529,7 @@ async def health(_: web.Request) -> web.Response:
                     "silenceSec": round(time.time() - s.last_event_at),
                     "messagesSeen": s.messages_seen,
                     "notifsSeen": s.notifs_seen,
+                    "chatsKnown": s.chats_known,
                     "unparsedNotifs": s.unparsed_notifs,
                     "reconnects": s.reconnects,
                 }
