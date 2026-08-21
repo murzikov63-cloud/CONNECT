@@ -5,6 +5,8 @@ import { closeDb, migrate } from './db/index.js'
 import { log } from './logger/index.js'
 import { closeQueues, inboundQueue } from './queue/index.js'
 import { createInboundWorker } from './amo/inbound.js'
+import { reportDelivery } from './amo/delivery.js'
+import type { DeliveryStatus } from './types.js'
 import { ensureSubscription } from './amo/events.js'
 import { createOutboundWorker } from './queue/outbound.js'
 import { cleanupOldMedia } from './wa/media.js'
@@ -33,6 +35,17 @@ async function main(): Promise<void> {
       )
       .catch((err: unknown) => logger.error({ err }, 'не удалось поставить входящее в очередь'))
   })
+
+  // Отметки «доставлено» и «прочитано» уходят в amoCRM: иначе в карточке
+  // навсегда остаётся «Отправлено», и менеджер не знает, дошло ли.
+  manager.on(
+    'delivery',
+    (u: { channelId: string; externalMessageId: string; status: DeliveryStatus }) => {
+      void reportDelivery(u.channelId, u.externalMessageId, u.status).catch((err: unknown) =>
+        logger.error({ err }, 'не удалось отметить доставку в amoCRM'),
+      )
+    },
+  )
 
   await manager.bootstrap()
 

@@ -7,7 +7,7 @@ import type { ChannelDriver } from '../channels/types.js'
 import type { MediaPayload, OutboundMessage } from '../types.js'
 import { absoluteMediaPath, saveMedia } from '../wa/media.js'
 import { loadSession, saveSession } from './auth-state.js'
-import { Api, NewMessage, StringSession, TelegramClient, bigInt } from './gramjs.js'
+import { Api, NewMessage, Raw, StringSession, TelegramClient, bigInt } from './gramjs.js'
 import type { TgClient } from './gramjs.js'
 import { displayName, extractContent, normalizeInbound } from './normalize.js'
 
@@ -114,6 +114,18 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
         this.logger.error({ err }, 'ошибка обработки входящего'),
       )
     }, new NewMessage({}))
+
+    // Прочтение Телеграм отмечает не по одному сообщению, а сразу «всё
+    // в этой переписке до такого-то номера». Разворачивает эту пачку
+    // в отдельные сообщения тот, кто знает, что мы отправляли.
+    client.addEventHandler((update: any) => {
+      if (update?.className !== 'UpdateReadHistoryOutbox') return
+      const peer = update.peer ?? {}
+      const chatId = String(peer.userId ?? peer.chatId ?? peer.channelId ?? '')
+      const maxId = Number(update.maxId ?? 0)
+      if (chatId === '' || maxId <= 0) return
+      this.emit('read-up-to', { externalChatId: chatId, maxId: String(maxId) })
+    }, new Raw({}))
 
     this.ready = true
     this.logger.info({ phone }, 'аккаунт Телеграма в сети')

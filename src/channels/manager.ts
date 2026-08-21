@@ -14,6 +14,9 @@ import type { ChannelDriver, ChannelKind } from './types.js'
 
 const logger = log('manager')
 
+/** Порядок жизни отправленного сообщения — по нему отличаем шаг вперёд. */
+const DELIVERY_ORDER: Record<string, number> = { sent: 1, delivered: 2, read: 3 }
+
 /** Что драйвер сообщает вместе со сменой состояния. */
 export interface StatusExtra {
   reason?: string
@@ -275,6 +278,12 @@ export class ChannelManager extends EventEmitter {
         logger.error({ err, channelId }, 'ошибка обновления статуса доставки'),
       )
     })
+
+    session.on('read-up-to', (u: { externalChatId: string; maxId: string }) => {
+      void this.onReadUpTo(channelId, u).catch((err: unknown) =>
+        logger.error({ err, channelId }, 'ошибка отметки о прочтении'),
+      )
+    })
   }
 
   private async onStatus(
@@ -433,13 +442,60 @@ export class ChannelManager extends EventEmitter {
     const column =
       u.status === 'delivered' ? 'delivered_at' : u.status === 'read' ? 'read_at' : 'sent_at'
 
-    await sql`
+    // Порядок жизни сообщения: отправлено → доставлено → прочитано.
+    // Сообщения о них приходят вперемешку, и без этого «доставлено»,
+    // пришедшее следом за «прочитано», отматывало бы состояние назад.
+    const changed = await sql<{ id: string }[]>`
       update messages set
         status = ${u.status},
         ${sql(column)} = coalesce(${sql(column)}, now())
-      where channel_id = ${channelId} and external_message_id = ${u.externalMessageId} and direction = 'out'
+      where channel_id = ${channelId}
+        and external_message_id = ${u.externalMessageId}
+        and direction = 'out'
+        and case status
+              when 'read' then 3
+              when 'delivered' then 2
+              when 'sent' then 1
+              else 0
+            end < ${DELIVERY_ORDER[u.status] ?? 0}
+      returning id::text as id
     `
+    // Ничего не изменилось — значит это повтор, и тревожить amoCRM незачем.
+    if (changed[0] === undefined) return
     this.emit('delivery', { channelId, ...u })
+  }
+
+  /**
+   * «Прочитано всё до такого-то сообщения» — так отмечает Телеграм.
+   * Разворачиваем пачку в отдельные сообщения: amoCRM ставит отметку
+   * каждому по отдельности.
+   */
+  private async onReadUpTo(
+    channelId: string,
+    u: { externalChatId: string; maxId: string },
+  ): Promise<void> {
+    const rows = await sql<{ external_message_id: string }[]>`
+      update messages m set status = 'read', read_at = coalesce(m.read_at, now())
+      from chats c
+      where c.id = m.chat_id
+        and m.channel_id = ${channelId}
+        and c.external_chat_id = ${u.externalChatId}
+        and m.direction = 'out'
+        and m.status <> 'read'
+        and m.external_message_id ~ '^[0-9]+$'
+        and m.external_message_id::bigint <= ${u.maxId}::bigint
+      returning m.external_message_id
+    `
+    for (const row of rows) {
+      this.emit('delivery', {
+        channelId,
+        externalMessageId: row.external_message_id,
+        status: 'read' as DeliveryStatus,
+      })
+    }
+    if (rows.length > 0) {
+      logger.info({ channelId, count: rows.length }, 'собеседник прочитал сообщения')
+    }
   }
 
   async shutdown(): Promise<void> {

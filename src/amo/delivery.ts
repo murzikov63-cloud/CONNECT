@@ -1,6 +1,7 @@
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import type { ChannelKind } from '../channels/types.js'
+import type { DeliveryStatus } from '../types.js'
 import { channelForKind } from './channels.js'
 import { DELIVERY, setDeliveryStatus } from './chat-client.js'
 
@@ -24,6 +25,43 @@ export async function reportUndelivered(
     logger.info({ kind, amoMessageId, reason }, 'amoCRM уведомлена о недоставке')
   } catch (err) {
     logger.error({ err, amoMessageId }, 'не удалось сообщить amoCRM о недоставке')
+  }
+}
+
+/**
+ * Сообщает amoCRM, что сообщение дошло до собеседника или прочитано.
+ *
+ * Без этого в карточке навсегда остаётся «Отправлено», и менеджер не знает,
+ * получил ли клиент сообщение вообще. В привычном сервисе на этом месте
+ * были две галочки — сделаем так же.
+ */
+export async function reportDelivery(
+  channelId: string,
+  externalMessageId: string,
+  status: DeliveryStatus,
+): Promise<void> {
+  const code = status === 'read' ? DELIVERY.read : status === 'delivered' ? DELIVERY.delivered : null
+  if (code === null) return
+
+  const rows = await sql<{ kind: ChannelKind; amo_message_id: string | null }[]>`
+    select ch.kind, m.amo_message_id
+    from messages m join channels ch on ch.id = m.channel_id
+    where m.channel_id = ${channelId}
+      and m.external_message_id = ${externalMessageId}
+      and m.direction = 'out'
+    limit 1
+  `
+  const row = rows[0]
+  // Сообщения, которых amoCRM не знает (например, отправленных до её
+  // подключения), помечать нечем — молча пропускаем.
+  if (row?.amo_message_id == null || row.amo_message_id === '') return
+
+  try {
+    await setDeliveryStatus(channelForKind(row.kind), row.amo_message_id, code)
+    logger.info({ kind: row.kind, status }, 'amoCRM уведомлена о доставке')
+  } catch (err) {
+    // Не беда: сообщение доставлено, а отметка о нём — украшение.
+    logger.warn({ err, amoMessageId: row.amo_message_id, status }, 'не удалось отметить доставку')
   }
 }
 
