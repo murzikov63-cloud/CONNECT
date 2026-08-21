@@ -20,7 +20,37 @@ if (bot === null) {
 const COOLDOWN_MS = 10 * 60 * 1000
 /** Для состояний, о которых уже знают и с которыми временно живут. */
 export const COOLDOWN_DAILY_MS = 24 * 60 * 60 * 1000
-const lastSent = new Map<string, number>()
+
+/**
+ * Где хранится, когда алерт отправляли в прошлый раз.
+ *
+ * В памяти этого мало: при перезапуске сервиса отсчёт начинается заново,
+ * и «раз в сутки» превращается в «на каждый перезапуск». В день, когда
+ * выкладок было три десятка, это и случилось.
+ */
+export interface CooldownStore {
+  get(key: string): Promise<number | undefined>
+  set(key: string, at: number): Promise<void>
+}
+
+function memoryStore(): CooldownStore {
+  const map = new Map<string, number>()
+  return {
+    get: (key) => Promise.resolve(map.get(key)),
+    set: (key, at) => {
+      map.set(key, at)
+      return Promise.resolve()
+    },
+    clear: () => map.clear(),
+  } as CooldownStore & { clear: () => void }
+}
+
+let store = memoryStore()
+
+/** Подключает хранилище, переживающее перезапуск. Вызывается при старте. */
+export function useCooldownStore(next: CooldownStore): void {
+  store = next
+}
 
 export type AlertLevel = 'info' | 'warn' | 'error'
 
@@ -35,9 +65,10 @@ export async function alert(
 ): Promise<boolean> {
   const key = `${level}:${title}`
   const now = Date.now()
-  const prev = lastSent.get(key)
+  // Не смогли прочитать отметку — лучше сообщить лишний раз, чем промолчать.
+  const prev = await store.get(key).catch(() => undefined)
   if (prev !== undefined && now - prev < cooldownMs) return false
-  lastSent.set(key, now)
+  await store.set(key, now).catch(() => undefined)
 
   const lines = [`${icon[level]} ${title}`]
   if (details !== undefined) {
@@ -58,5 +89,5 @@ export async function alert(
 
 /** Сбрасывает окно дедупликации — нужен в тестах. */
 export function resetAlertCooldown(): void {
-  lastSent.clear()
+  store = memoryStore()
 }

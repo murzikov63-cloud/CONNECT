@@ -1,4 +1,5 @@
-import { alert } from './alerts/index.js'
+import { alert, useCooldownStore } from './alerts/index.js'
+import { dbCooldownStore } from './alerts/store.js'
 import { buildServer } from './api/server.js'
 import { config } from './config/index.js'
 import { closeDb, migrate } from './db/index.js'
@@ -16,6 +17,9 @@ const logger = log('boot')
 
 async function main(): Promise<void> {
   await migrate()
+
+  // Чтобы «раз в сутки» означало сутки, а не «до следующего перезапуска».
+  useCooldownStore(dbCooldownStore())
 
   const manager = new ChannelManager()
   const outboundWorker = createOutboundWorker(manager)
