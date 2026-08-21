@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { COOLDOWN_DAILY_MS, alert } from '../alerts/index.js'
 import { channelForScope } from '../amo/channels.js'
+import { reportUndelivered } from '../amo/delivery.js'
 import type { MaxDriver, MaxIncoming } from '../max/driver.js'
 import { chatApiReady, config } from '../config/index.js'
 import { sql } from '../db/index.js'
@@ -514,6 +515,16 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
 
     if (chat === null) {
       // Вот теперь это потеря: менеджер написал, а мы не смогли доставить.
+      // Обязательно сообщаем об этом amoCRM: иначе она покажет «Отправлено»,
+      // и менеджер будет ждать ответа, которого не будет.
+      const кому = parsed.receiverName === '' ? 'этому контакту' : parsed.receiverName
+      void reportUndelivered(
+        amoChannel.kind,
+        parsed.amoMessageId,
+        parsed.receiverPhone === ''
+          ? 'у контакта не указан телефон, найти его в мессенджере не по чему'
+          : `${кому} нет в этом мессенджере по номеру ${parsed.receiverPhone}`,
+      )
       logger.warn(
         {
           мессенджер: amoChannel.kind,

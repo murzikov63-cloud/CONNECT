@@ -1,5 +1,6 @@
 import { Worker } from 'bullmq'
 import type { Job } from 'bullmq'
+import { reportUndeliveredByMessage } from '../amo/delivery.js'
 import { alert } from '../alerts/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
@@ -116,7 +117,9 @@ export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJo
         update messages set status = 'failed', error = ${err.message}
         where id = ${job.data.dbMessageId}
       `
-      await alert('error', 'Сообщение не ушло в WhatsApp', {
+      // amoCRM должна показать ошибку в чате, а не «Отправлено».
+      await reportUndeliveredByMessage(job.data.dbMessageId, err.message)
+      await alert('error', 'Сообщение не ушло клиенту', {
         Номер: job.data.channelId,
         Чат: job.data.externalChatId,
         Причина: err.message,
