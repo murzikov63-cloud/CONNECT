@@ -7,18 +7,64 @@ const logger = log('amo-webhook')
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/** Подпись вебхука: HMAC-SHA1 от сырого тела на секрете своего канала. */
+/**
+ * Виды тела, от которых может быть посчитана подпись.
+ *
+ * amoCRM подписывает не то тело, которое присылает: подпись считается
+ * от JSON в экранированном виде — русские буквы записаны как \uXXXX,
+ * косые черты как \/, — а приходит к нам обычный текст. Пока в переписке
+ * одна латиница, два вида совпадают и всё сходится; первое же русское
+ * слово всё ломает. Выяснено на 104 живых запросах.
+ *
+ * Поэтому пробуем три вида: как пришло, и две пересборки — с косыми
+ * чертами и без. Лишние два расчёта стоят микросекунды.
+ */
+function signedForms(rawBody: string): string[] {
+  const forms = [rawBody]
+  try {
+    const canonical = JSON.stringify(JSON.parse(rawBody))
+    forms.push(canonical.replace(/\//g, '\\/'), canonical)
+  } catch {
+    // Не JSON — сравнить можно только с тем, что пришло.
+  }
+  return forms
+}
+
+/** Совпадают ли подписи. Сравниваем за постоянное время, а не по первому байту. */
+function sameSignature(expected: string, given: string): boolean {
+  const a = Buffer.from(expected)
+  const b = Buffer.from(given)
+  if (a.length !== b.length) return false
+  return timingSafeEqual(a, b)
+}
+
+/** Подпись вебхука: HMAC-SHA1 от тела на секрете своего канала. */
 export function verifyWebhookSignature(
   secretKey: string,
   rawBody: string,
   signature: string,
 ): boolean {
   if (secretKey === '' || signature === '') return false
-  const expected = createHmac('sha1', secretKey).update(rawBody).digest('hex')
-  const a = Buffer.from(expected)
-  const b = Buffer.from(signature.toLowerCase())
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
+  const given = signature.toLowerCase()
+  return signedForms(rawBody).some((form) =>
+    sameSignature(createHmac('sha1', secretKey).update(form).digest('hex'), given),
+  )
+}
+
+/**
+ * Можно ли вообще судить о подлинности этого запроса.
+ *
+ * Если тело не разбирается как JSON, вид, от которого считалась подпись,
+ * нам неизвестен — и несовпадение ещё не означает подделку. Отвергать
+ * такое нельзя: потеряется ответ менеджера клиенту.
+ */
+export function signatureIsDecidable(rawBody: string): boolean {
+  try {
+    JSON.parse(rawBody)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

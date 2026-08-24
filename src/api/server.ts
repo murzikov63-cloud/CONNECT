@@ -22,6 +22,7 @@ import {
   describeSignatureMismatch,
   parseOutgoing,
   resolveChat,
+  signatureIsDecidable,
   verifyWebhookSignature,
 } from '../amo/webhook.js'
 import {
@@ -461,33 +462,38 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     const raw = (req as unknown as { rawBody?: string }).rawBody ?? ''
     const signature = String(req.headers['x-signature'] ?? '')
     if (!verifyWebhookSignature(amoChannel.secretKey, raw, signature)) {
-      const report = describeSignatureMismatch(
-        amoChannel,
-        raw,
-        signature,
-        req.headers as Record<string, unknown>,
-      )
-      logger.warn(report, 'подпись вебхука не сошлась')
-
-      // Пока способ подписи не выяснен, запрос всё же обрабатываем: адрес
-      // содержит scope_id, который знают только amoCRM и мы, так что защита
-      // остаётся, хоть и слабее. Владельцу об этом сообщаем, чтобы это
-      // не осталось незамеченным навсегда.
-      // Раз в сутки, а не на каждое сообщение: состояние известное,
-      // ждём ответа техподдержки amoCRM, а не новостей.
-      void alert(
-        'warn',
-        'amoCRM подписывает вебхуки не так, как ожидалось',
-        { Последствие: 'ответы менеджеров принимаются с проверкой только по адресу' },
-        COOLDOWN_DAILY_MS,
-      )
-      // Сырое тело кладём рядом с медиа — по нему подберём верный способ.
-      void writeFile(
-        join(config.MEDIA_DIR, `_webhook-${Date.now()}.json`),
-        JSON.stringify({ signature, headers: req.headers, body: raw }, null, 2),
-      ).catch(() => {
-        /* не критично */
-      })
+      // Тело не разбирается как JSON — вид, от которого считалась подпись,
+      // неизвестен, и несовпадение ещё не значит подделку. Пропускаем,
+      // но сообщаем: сама форма запроса изменилась.
+      if (!signatureIsDecidable(raw)) {
+        logger.warn(
+          describeSignatureMismatch(amoChannel, raw, signature, req.headers as Record<string, unknown>),
+          'подпись не сходится, а тело не разобрать — пропускаю',
+        )
+        void alert(
+          'warn',
+          'amoCRM прислала вебхук неизвестного вида',
+          { Последствие: 'подлинность проверить нечем, запрос принят по адресу' },
+          COOLDOWN_DAILY_MS,
+        )
+      } else {
+        // Подпись посчитать можно, и она не сошлась. Это чужой запрос.
+        logger.warn(
+          { мессенджер: amoChannel.kind, длинаТела: raw.length },
+          'чужой запрос с неверной подписью — отклоняю',
+        )
+        void alert('error', 'Кто-то стучится к нам под видом amoCRM', {
+          Мессенджер: amoChannel.kind,
+          Действие: 'запрос отклонён',
+        })
+        void writeFile(
+          join(config.MEDIA_DIR, `_webhook-${Date.now()}.json`),
+          JSON.stringify({ signature, headers: req.headers, body: raw }, null, 2),
+        ).catch(() => {
+          /* не критично */
+        })
+        return reply.code(401).send({ error: 'неверная подпись' })
+      }
     }
 
     const parsed = parseOutgoing(req.body)
