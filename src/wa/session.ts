@@ -118,8 +118,15 @@ export class WaSession extends EventEmitter {
     })
 
     sock.ev.on('messages.upsert', (payload: any) => {
-      if (payload?.type !== 'notify') return
+      const вид = payload?.type
+      // «notify» — новое сообщение в переписке. «append» — то, что мы
+      // отправили сами с телефона или из веб-версии WhatsApp: менеджер
+      // вполне может ответить клиенту мимо amoCRM, и такие сообщения
+      // тоже должны быть в карточке, иначе там половина разговора.
+      if (вид !== 'notify' && вид !== 'append') return
+
       for (const msg of payload.messages ?? []) {
+        if (вид === 'append' && !this.свежееСвоё(msg)) continue
         void this.handleIncoming(msg).catch((err: unknown) => {
           this.logger.error({ err }, 'ошибка обработки входящего')
         })
@@ -198,6 +205,24 @@ export class WaSession extends EventEmitter {
       })
     }, delay)
   }
+
+  /**
+   * Своё ли это сообщение и достаточно ли оно свежее.
+   *
+   * В той же куче WhatsApp присылает и старую переписку, когда
+   * синхронизирует историю. Без проверки по времени в карточку клиента
+   * хлынули бы разговоры недельной давности.
+   */
+  private свежееСвоё(msg: any): boolean {
+    if (msg?.key?.fromMe !== true) return false
+    const raw = msg?.messageTimestamp
+    const seconds = Number(raw?.low ?? raw ?? 0)
+    if (seconds <= 0) return false
+    return seconds * 1000 > Date.now() - WaSession.APPEND_MAX_AGE_MS
+  }
+
+  /** Насколько старое «своё» сообщение ещё считаем сегодняшним разговором. */
+  private static readonly APPEND_MAX_AGE_MS = 10 * 60 * 1000
 
   private async handleIncoming(msg: any): Promise<void> {
     const normalized = normalizeInbound(this.channelId, msg)
