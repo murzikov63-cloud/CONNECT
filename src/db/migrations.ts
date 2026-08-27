@@ -161,4 +161,15 @@ export const migrations: Migration[] = [
       alter table chats add column if not exists amo_conversation_key text;
     `,
   },
+  {
+    name: '005_wa_lid',
+    sql: `
+      -- WhatsApp постепенно прячет телефоны за внутренним номером «…@lid».
+      -- В сообщениях клиента он приходит вместе с телефоном, а в наших
+      -- собственных, отправленных с телефона или из веб-версии, — один,
+      -- без телефона. Чтобы узнать переписку, соответствие надо помнить.
+      alter table chats add column if not exists external_alt_id text;
+      create index if not exists chats_alt_idx on chats (channel_id, external_alt_id);
+    `,
+  },
 ]

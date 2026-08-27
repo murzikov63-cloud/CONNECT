@@ -14,7 +14,7 @@ import type { WASocket } from './baileys.js'
 import { CAPABILITIES } from '../channels/types.js'
 import { usePostgresAuthState } from './auth-state.js'
 import { absoluteMediaPath, saveMedia } from './media.js'
-import { extractContent, normalizeInbound } from './normalize.js'
+import { extractContent, lidOf, normalizeInbound, realJid } from './normalize.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -125,6 +125,23 @@ export class WaSession extends EventEmitter {
       // тоже должны быть в карточке, иначе там половина разговора.
       if (вид !== 'notify' && вид !== 'append') return
 
+      // Пока разбираемся, почему ответы из веб-версии не доходят,
+      // записываем каждую такую пачку: вид, сколько сообщений, чьи они
+      // и насколько свежие.
+      if (вид === 'append') {
+        this.logger.info(
+          {
+            сообщений: (payload.messages ?? []).length,
+            своих: (payload.messages ?? []).filter((m: any) => m?.key?.fromMe === true).length,
+            возраст: (payload.messages ?? []).map((m: any) => {
+              const t = Number(m?.messageTimestamp?.low ?? m?.messageTimestamp ?? 0)
+              return t > 0 ? Math.round(Date.now() / 1000 - t) : null
+            }),
+          },
+          'WhatsApp дописал сообщения в переписку',
+        )
+      }
+
       for (const msg of payload.messages ?? []) {
         if (вид === 'append' && !this.свежееСвоё(msg)) continue
         void this.handleIncoming(msg).catch((err: unknown) => {
@@ -224,9 +241,51 @@ export class WaSession extends EventEmitter {
   /** Насколько старое «своё» сообщение ещё считаем сегодняшним разговором. */
   private static readonly APPEND_MAX_AGE_MS = 10 * 60 * 1000
 
+  /**
+   * Соответствие внутреннего номера WhatsApp телефонному адресу.
+   *
+   * В сообщениях клиента WhatsApp присылает оба, в наших собственных —
+   * только внутренний. Поэтому запоминаем пары, как только увидим,
+   * и держим под рукой; после перезапуска берём из базы.
+   */
+  private readonly внутренниеНомера = new Map<string, string>()
+
+  private async адресПереписки(key: any): Promise<string> {
+    const прямой = realJid(key)
+    const внутренний = lidOf(key)
+
+    if (прямой !== '') {
+      if (внутренний !== '') this.внутренниеНомера.set(внутренний, прямой)
+      return прямой
+    }
+    if (внутренний === '') return ''
+
+    const изПамяти = this.внутренниеНомера.get(внутренний)
+    if (изПамяти !== undefined) return изПамяти
+
+    const rows = await sql<{ external_chat_id: string }[]>`
+      select external_chat_id from chats
+      where channel_id = ${this.channelId} and external_alt_id = ${внутренний}
+      limit 1
+    `
+    const изБазы = rows[0]?.external_chat_id
+    if (изБазы === undefined) return ''
+    this.внутренниеНомера.set(внутренний, изБазы)
+    return изБазы
+  }
+
   private async handleIncoming(msg: any): Promise<void> {
-    const normalized = normalizeInbound(this.channelId, msg)
-    if (normalized === null) return
+    const адрес = await this.адресПереписки(msg?.key)
+    const normalized = normalizeInbound(this.channelId, msg, адрес === '' ? undefined : адрес)
+    if (normalized === null) {
+      if (msg?.key?.fromMe === true) {
+        this.logger.info(
+          { внутренний: lidOf(msg?.key) },
+          'не знаю, кому писали: внутренний номер WhatsApp ещё не встречался',
+        )
+      }
+      return
+    }
 
     const content = extractContent(msg.message)
     if (content.mediaKind !== undefined) {

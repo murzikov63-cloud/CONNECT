@@ -31,6 +31,12 @@ export interface MediaPayload {
 }
 
 export interface InboundMessage {
+  /**
+   * Внутренний номер WhatsApp («…@lid»), если сообщение пришло по нему.
+   * Нужен, чтобы узнать переписку в своих же сообщениях: в них WhatsApp
+   * телефона не даёт вовсе.
+   */
+  altChatId?: string
   channelId: string
   externalMessageId: string
   externalChatId: string
