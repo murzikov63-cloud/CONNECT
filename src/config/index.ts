@@ -56,6 +56,11 @@ const schema = z.object({
    * Пустой — агенту писать нельзя.
    */
   AGENT_API_TOKEN: z.string().default(''),
+  /**
+   * Куда сообщить, что клиент ответил, — чтобы агент продаж подготовил
+   * следующий черновик. Пусто — не зовём никого.
+   */
+  AGENT_DRAFT_WEBHOOK_URL: z.string().default(''),
   // Пароль для входа в админку. Пустой — вход по паролю выключен.
   ADMIN_PASSWORD: z.string().default(''),
   ADMIN_CORS_ORIGIN: z.string().default(''),

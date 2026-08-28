@@ -1,6 +1,7 @@
 import { UnrecoverableError, Worker } from 'bullmq'
 import type { Job } from 'bullmq'
 import { alert } from '../alerts/index.js'
+import { config } from '../config/index.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import { QUEUE_INBOUND, connection } from '../queue/index.js'
@@ -189,6 +190,40 @@ async function sendToAmo(
   }
 }
 
+/**
+ * Сообщить агенту продаж, что клиент ответил.
+ *
+ * Разговор не заканчивается первым сообщением: на каждый ответ клиента
+ * агент готовит следующий черновик, а менеджер его одобряет. Ошибку
+ * глотаем намеренно — переписка в карточке уже есть, и терять её из-за
+ * недоступного n8n нельзя.
+ */
+async function позватьАгента(row: Row): Promise<void> {
+  if (config.AGENT_DRAFT_WEBHOOK_URL === '') return
+  if (row.amo_lead_id === null) return
+
+  try {
+    const res = await fetch(config.AGENT_DRAFT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        leadId: Number(row.amo_lead_id),
+        event: 'client_reply',
+        text: row.body ?? '',
+        kind: row.channel_kind,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) {
+      logger.warn({ статус: res.status, leadId: row.amo_lead_id }, 'агент продаж не принял событие')
+      return
+    }
+    logger.info({ leadId: row.amo_lead_id }, 'позвал агента продаж на ответ клиента')
+  } catch (err: unknown) {
+    logger.warn({ err, leadId: row.amo_lead_id }, 'не смог позвать агента продаж')
+  }
+}
+
 export function createInboundWorker(): Worker<InboundJob> {
   const worker = new Worker<InboundJob>(
     QUEUE_INBOUND,
@@ -252,6 +287,11 @@ export function createInboundWorker(): Worker<InboundJob> {
         { messageId: row.message_id, amoMessageId: result.new_message.msgid },
         'сообщение передано в amoCRM',
       )
+
+      // Клиент ответил — значит разговор продолжается, и агенту продаж
+      // есть что предложить менеджеру. Своё же отправленное сюда не
+      // считается: на собственную реплику отвечать нечего.
+      if (!isOutgoing) await позватьАгента(row)
     },
     { connection, concurrency: 3 },
   )
