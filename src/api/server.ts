@@ -17,7 +17,7 @@ import { getSettings, saveSettings } from '../settings.js'
 import type { ChannelManager } from '../channels/manager.js'
 import { absoluteMediaPath, verifyMediaToken } from '../wa/media.js'
 import { isKnownKind } from '../channels/registry.js'
-import { agentSendSchema, pickChat } from './agent-send.js'
+import { agentSendSchema, openChatForLead, pickChat } from './agent-send.js'
 import type { ChatCandidate } from './agent-send.js'
 import { CAPABILITIES, CHANNEL_TITLES } from '../channels/types.js'
 import {
@@ -398,14 +398,21 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
         and (${leadId ?? null}::bigint is null or c.amo_lead_id = ${leadId ?? null}::bigint)
         and c.ignored = false
     `
-    if (chats.length === 0) {
-      return reply.code(404).send({ error: 'по этой сделке переписки нет' })
+    let chat = pickChat(chats, kind)
+
+    // Переписки нет вовсе — обычное дело для заявки с сайта: человек
+    // оставил телефон и нам не писал. Тогда пишем первыми: ищем его
+    // в мессенджерах по номеру из карточки.
+    if (chat === null && leadId !== undefined) {
+      const settings = await getSettings()
+      chat = await openChatForLead(manager, leadId, kind, settings.firstContactOrder)
     }
-    const chat = pickChat(chats, kind)
+
     if (chat === null) {
+      const где = kind === undefined ? 'ни в одном мессенджере' : `в мессенджере ${kind}`
       return reply
         .code(404)
-        .send({ error: `по этой сделке нет переписки в мессенджере ${String(kind)}` })
+        .send({ error: `по этой сделке нет переписки и номер не нашёлся ${где}` })
     }
 
     const driver = manager.getDriver(chat.channel_id)

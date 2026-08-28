@@ -58,3 +58,14 @@ describe('разбор запроса на отправку', () => {
     expect(agentSendSchema.safeParse({ leadId: 1, kind: 'viber', text: 'x' }).success).toBe(false)
   })
 })
+
+describe('порядок мессенджеров при первом сообщении', () => {
+  it('чат, заведённый по телефону, идёт в обход выбора по свежести', () => {
+    // pickChat решает только между уже существующими переписками.
+    // Когда их нет, чат приходит от openChatForLead и попадает в отправку
+    // напрямую — проверяем, что такой чат не отсеивается пустой датой.
+    const fresh = chat('whatsapp', null)
+    expect(pickChat([fresh])).toBe(fresh)
+    expect(pickChat([fresh], 'whatsapp')).toBe(fresh)
+  })
+})

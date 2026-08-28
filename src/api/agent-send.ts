@@ -8,6 +8,13 @@
  * туда попадают ответы менеджера с телефона (см. amo/inbound.ts).
  */
 import { z } from 'zod'
+import { contactPhones, leadContactIds } from '../amo/rest-client.js'
+import { sql } from '../db/index.js'
+import { log } from '../logger/index.js'
+import type { ChannelManager } from '../channels/manager.js'
+import type { ChannelKind } from '../channels/types.js'
+
+const logger = log('agent-send')
 
 /** Тело запроса к POST /api/messages. */
 export const agentSendSchema = z
@@ -59,4 +66,68 @@ export function pickChat(rows: ChatCandidate[], kind?: string): ChatCandidate | 
     return bt - at
   })
   return byRecency[0] ?? null
+}
+
+/**
+ * Завести переписку по сделке, в которой её ещё нет.
+ *
+ * Ровно случай заявки с сайта: сделка есть, человек нам не писал ни разу,
+ * и писать первыми приходится нам. Телефон берём из карточки контакта —
+ * в сделке его нет — и ищем человека в мессенджерах по очереди.
+ *
+ * Сделку и контакт проставляем сразу же. Без этого публикация в amoCRM
+ * решит, что переписка ничья, и заведёт второй контакт с тем же телефоном
+ * и вторую сделку — вместо той, что пришла с сайта.
+ */
+export async function openChatForLead(
+  manager: ChannelManager,
+  leadId: number,
+  kind: ChannelKind | undefined,
+  order: ChannelKind[],
+): Promise<ChatCandidate | null> {
+  const contactIds = await leadContactIds(leadId)
+  if (contactIds.length === 0) {
+    logger.info({ leadId }, 'у сделки нет контакта — писать некому')
+    return null
+  }
+
+  const targets: { contactId: number; name: string; phone: string }[] = []
+  for (const contactId of contactIds) {
+    const { name, phones } = await contactPhones(contactId)
+    for (const phone of phones) targets.push({ contactId, name, phone })
+  }
+  if (targets.length === 0) {
+    logger.info({ leadId }, 'у контакта не указан телефон — искать не по чему')
+    return null
+  }
+
+  // Мессенджер снаружи, телефон внутри: важнее попасть в предпочтительный
+  // мессенджер, чем перебрать все телефоны в первом попавшемся.
+  const kinds = kind === undefined ? order : [kind]
+  for (const k of kinds) {
+    for (const t of targets) {
+      const opened = await manager.openChatByPhone(k, t.phone, t.name)
+      if (opened === null) continue
+
+      await sql`
+        update chats set amo_lead_id = ${leadId}, amo_contact_id = ${t.contactId}, updated_at = now()
+        where id = ${opened.chat_id}::bigint
+      `
+      logger.info(
+        { leadId, contactId: t.contactId, мессенджер: k, chatId: opened.chat_id },
+        'переписки не было — завёл по телефону из карточки',
+      )
+      return {
+        chat_id: opened.chat_id,
+        channel_id: opened.channel_id,
+        external_chat_id: opened.external_chat_id,
+        phone: t.phone,
+        channel_kind: k,
+        last_message_at: null,
+      }
+    }
+  }
+
+  logger.info({ leadId, мессенджеры: kinds }, 'номер не нашёлся ни в одном мессенджере')
+  return null
 }

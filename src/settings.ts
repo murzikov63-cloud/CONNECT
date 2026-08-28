@@ -1,5 +1,6 @@
 import { config } from './config/index.js'
 import { sql } from './db/index.js'
+import type { ChannelKind } from './channels/types.js'
 
 /** Настройки, которые Анатолий меняет из админки без правки кода. */
 export interface Settings {
@@ -23,6 +24,13 @@ export interface Settings {
    * присылает в каждом вебхуке, поэтому запоминаем его сами.
    */
   amoSenderRefId: string | null
+  /**
+   * В каком порядке пробовать мессенджеры, когда человек нам ещё не писал
+   * (заявка с сайта): берём первый, в котором номер вообще нашёлся.
+   * WhatsApp первым, потому что в него пишут чаще всего; MAX последним —
+   * закрывший поиск по номеру там недостижим в принципе.
+   */
+  firstContactOrder: ChannelKind[]
 }
 
 const DEFAULTS = (): Settings => ({
@@ -36,6 +44,7 @@ const DEFAULTS = (): Settings => ({
   amoPipelineId: null,
   amoStatusId: null,
   amoSenderRefId: null,
+  firstContactOrder: ['whatsapp', 'telegram', 'max'],
 })
 
 const KEY = 'app'

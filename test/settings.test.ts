@@ -14,6 +14,7 @@ const settings = (personal: string[]): Settings => ({
   amoPipelineId: null,
   amoStatusId: null,
   amoSenderRefId: null,
+  firstContactOrder: ['whatsapp', 'telegram', 'max'],
 })
 
 describe('normalizePhone', () => {
