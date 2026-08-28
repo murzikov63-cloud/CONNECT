@@ -1,4 +1,5 @@
 import { config } from '../config/index.js'
+import type { ChannelKind } from '../channels/types.js'
 import { log } from '../logger/index.js'
 
 const logger = log('amo-rest')
@@ -180,6 +181,34 @@ export async function leadContactIds(leadId: number): Promise<number[]> {
     `/api/v4/leads/${leadId}?with=contacts`,
   )
   return (res._embedded?.contacts ?? []).map((c) => c.id)
+}
+
+/**
+ * Мессенджер, который клиент выбрал сам в форме на сайте.
+ *
+ * В калькуляторе есть вопрос «куда прислать расчёт», и ответ уезжает
+ * в поле сделки CALC_MESSENGER. Просьбу клиента уважаем: писать ему
+ * в другой мессенджер, когда он назвал свой, — верный способ остаться
+ * непрочитанным.
+ */
+export async function leadPreferredMessenger(leadId: number): Promise<ChannelKind | null> {
+  const res = await request<{
+    custom_fields_values?: { field_code?: string; values?: { value?: string }[] }[]
+  }>('GET', `/api/v4/leads/${leadId}`)
+
+  const raw = (res.custom_fields_values ?? []).find((f) => f.field_code === 'CALC_MESSENGER')
+    ?.values?.[0]?.value
+  if (raw === undefined) return null
+
+  // Сайт кладёт туда подпись для человека, а не код.
+  const byLabel: Record<string, ChannelKind> = {
+    whatsapp: 'whatsapp',
+    telegram: 'telegram',
+    телеграм: 'telegram',
+    max: 'max',
+    макс: 'max',
+  }
+  return byLabel[String(raw).trim().toLowerCase()] ?? null
 }
 
 export interface AmoWebhook {

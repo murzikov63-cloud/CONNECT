@@ -8,7 +8,7 @@
  * туда попадают ответы менеджера с телефона (см. amo/inbound.ts).
  */
 import { z } from 'zod'
-import { contactPhones, leadContactIds } from '../amo/rest-client.js'
+import { contactPhones, leadContactIds, leadPreferredMessenger } from '../amo/rest-client.js'
 import { sql } from '../db/index.js'
 import { log } from '../logger/index.js'
 import type { ChannelManager } from '../channels/manager.js'
@@ -101,9 +101,9 @@ export async function openChatForLead(
     return null
   }
 
-  // Мессенджер снаружи, телефон внутри: важнее попасть в предпочтительный
-  // мессенджер, чем перебрать все телефоны в первом попавшемся.
-  const kinds = kind === undefined ? order : [kind]
+  const kinds = kind === undefined ? await preferredFirst(leadId, order) : [kind]
+  // Мессенджер снаружи, телефон внутри: важнее попасть в нужный мессенджер,
+  // чем перебрать все телефоны в первом попавшемся.
   for (const k of kinds) {
     for (const t of targets) {
       const opened = await manager.openChatByPhone(k, t.phone, t.name)
@@ -130,4 +130,22 @@ export async function openChatForLead(
 
   logger.info({ leadId, мессенджеры: kinds }, 'номер не нашёлся ни в одном мессенджере')
   return null
+}
+
+/**
+ * Порядок обхода мессенджеров с учётом просьбы клиента.
+ *
+ * В калькуляторе на сайте есть вопрос «куда прислать расчёт». Если человек
+ * ответил, начинаем оттуда: писать в другой мессенджер, когда он назвал
+ * свой, — верный способ остаться непрочитанным. Остальные остаются
+ * запасными: выбранного мессенджера у человека может и не оказаться.
+ */
+async function preferredFirst(leadId: number, order: ChannelKind[]): Promise<ChannelKind[]> {
+  const preferred = await leadPreferredMessenger(leadId).catch((err: unknown) => {
+    logger.warn({ err, leadId }, 'не смог прочитать выбранный клиентом мессенджер')
+    return null
+  })
+  if (preferred === null) return order
+  logger.info({ leadId, мессенджер: preferred }, 'клиент сам просил писать сюда')
+  return [preferred, ...order.filter((k) => k !== preferred)]
 }
