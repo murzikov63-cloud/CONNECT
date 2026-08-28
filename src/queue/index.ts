@@ -10,6 +10,14 @@ export const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: 
 export interface OutboundJob extends OutboundMessage {
   /** id строки в messages — по ней проставляем статус после отправки. */
   dbMessageId: string
+  /**
+   * Показать сообщение в карточке amoCRM после успешной отправки.
+   * Нужно только тому, что отправили мы сами (агент продаж): про
+   * сообщения из amoCRM она и так знает, и второй раз их слать нельзя.
+   */
+  publishToAmo?: boolean
+  /** Переписка — её ждёт задача публикации в amoCRM. */
+  chatId?: string
 }
 
 export interface InboundJob {

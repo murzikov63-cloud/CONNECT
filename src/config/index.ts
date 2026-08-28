@@ -50,6 +50,12 @@ const schema = z.object({
   TG_ALERT_CHAT_ID: z.string().default(''),
 
   ADMIN_API_KEY: z.string().min(8),
+  /**
+   * Ключ для агента продаж (n8n). Отдельный от админского: у агента одно
+   * право — отправить текст по сделке, и отзывается оно само по себе.
+   * Пустой — агенту писать нельзя.
+   */
+  AGENT_API_TOKEN: z.string().default(''),
   // Пароль для входа в админку. Пустой — вход по паролю выключен.
   ADMIN_PASSWORD: z.string().default(''),
   ADMIN_CORS_ORIGIN: z.string().default(''),

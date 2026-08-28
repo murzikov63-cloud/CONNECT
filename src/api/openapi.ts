@@ -245,6 +245,42 @@ export const openapi = {
       },
     },
     '/api/messages': {
+      post: {
+        summary: 'Отправить сообщение клиенту от лица агента продаж',
+        description:
+          'Ключ агента в заголовке X-Agent-Token. Адресация по сделке amoCRM. ' +
+          'Мессенджер выбирается сам — тот, где разговор шёл последним.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['text'],
+                properties: {
+                  leadId: { type: 'integer', description: 'Сделка amoCRM' },
+                  chatId: { type: 'string', description: 'Переписка, если уже известна' },
+                  kind: { type: 'string', enum: ['whatsapp', 'telegram', 'max'] },
+                  text: { type: 'string', maxLength: 4096 },
+                  idempotencyKey: {
+                    type: 'string',
+                    description: 'Ключ повтора — обычно id черновика',
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Поставлено в очередь' },
+          '400': { description: 'Неверный запрос' },
+          '401': { description: 'Неверный ключ агента' },
+          '403': { description: 'Отправка от агента выключена' },
+          '404': { description: 'По сделке нет переписки' },
+          '409': { description: 'Такое сообщение уже отправляется' },
+          '503': { description: 'Канал не в сети' },
+        },
+      },
       get: {
         summary: 'Журнал сообщений с фильтрами',
         parameters: [

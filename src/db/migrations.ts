@@ -161,4 +161,15 @@ export const migrations: Migration[] = [
       alter table chats add column if not exists amo_conversation_key text;
     `,
   },
+  {
+    name: '005_agent_ref',
+    sql: `
+      -- Ключ повтора для сообщений от агента продаж. n8n перезапускает узел
+      -- при любой сетевой ошибке, и без этого одобренный черновик ушёл бы
+      -- клиенту дважды.
+      alter table messages add column if not exists agent_ref text;
+      create unique index if not exists messages_agent_ref_uniq
+        on messages (agent_ref) where agent_ref is not null;
+    `,
+  },
 ]

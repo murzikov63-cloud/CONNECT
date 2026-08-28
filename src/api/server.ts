@@ -17,6 +17,8 @@ import { getSettings, saveSettings } from '../settings.js'
 import type { ChannelManager } from '../channels/manager.js'
 import { absoluteMediaPath, verifyMediaToken } from '../wa/media.js'
 import { isKnownKind } from '../channels/registry.js'
+import { agentSendSchema, pickChat } from './agent-send.js'
+import type { ChatCandidate } from './agent-send.js'
 import { CAPABILITIES, CHANNEL_TITLES } from '../channels/types.js'
 import {
   describeSignatureMismatch,
@@ -343,6 +345,108 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
       limit ${limit} offset ${offset}
     `
     return { items: rows, limit, offset }
+  })
+
+  /**
+   * Отправка клиенту от лица агента продаж.
+   *
+   * Всё остальное исходящее приходит вебхуком из amoCRM, то есть его
+   * инициировал живой менеджер. Здесь инициатор — бот: менеджер только
+   * нажал «Одобрить» под черновиком в группе PS SALLES.
+   */
+  app.post('/api/messages', async (req, reply) => {
+    // Ключ агента отдельный от админского: у агента одно право — написать
+    // клиенту по сделке, и отозвать его можно, не трогая админку.
+    const token = String(req.headers['x-agent-token'] ?? '')
+    const adminKey = req.headers['x-api-key']
+    const asAdmin = typeof adminKey === 'string' && adminKey === config.ADMIN_API_KEY
+    if (!asAdmin) {
+      if (config.AGENT_API_TOKEN === '') {
+        return reply.code(403).send({ error: 'отправка от агента выключена' })
+      }
+      if (token !== config.AGENT_API_TOKEN) {
+        return reply.code(401).send({ error: 'нужен ключ агента' })
+      }
+    }
+
+    const parsed = agentSendSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'неверный запрос' })
+    }
+    const { leadId, chatId, kind, text, idempotencyKey } = parsed.data
+
+    // Повтор узла n8n не должен отправлять текст второй раз. Проверяем
+    // до всего остального: это самый дешёвый отказ.
+    if (idempotencyKey !== undefined) {
+      const seen = await sql<{ id: string; status: string }[]>`
+        select id::text, status from messages where agent_ref = ${idempotencyKey}
+      `
+      const prev = seen[0]
+      if (prev !== undefined) {
+        return { ok: true, messageId: prev.id, status: prev.status, duplicate: true }
+      }
+    }
+
+    const chats = await sql<ChatCandidate[]>`
+      select c.id::text          as chat_id,
+             c.channel_id::text  as channel_id,
+             c.external_chat_id, c.phone,
+             ch.kind             as channel_kind,
+             c.last_message_at
+      from chats c join channels ch on ch.id = c.channel_id
+      where (${chatId ?? null}::text is null or c.id::text = ${chatId ?? null})
+        and (${leadId ?? null}::bigint is null or c.amo_lead_id = ${leadId ?? null}::bigint)
+        and c.ignored = false
+    `
+    if (chats.length === 0) {
+      return reply.code(404).send({ error: 'по этой сделке переписки нет' })
+    }
+    const chat = pickChat(chats, kind)
+    if (chat === null) {
+      return reply
+        .code(404)
+        .send({ error: `по этой сделке нет переписки в мессенджере ${String(kind)}` })
+    }
+
+    const driver = manager.getDriver(chat.channel_id)
+    if (driver === undefined || !driver.isReady()) {
+      // Отдаём отказ сразу, а не копим в очереди: агент должен сказать
+      // менеджеру «не ушло», пока тот ещё смотрит на черновик.
+      return reply.code(503).send({ error: `канал ${chat.channel_kind} сейчас не в сети` })
+    }
+
+    const inserted = await sql<{ id: string }[]>`
+      insert into messages (
+        channel_id, chat_id, direction, type, body, status, occurred_at, agent_ref
+      ) values (
+        ${chat.channel_id}::uuid, ${chat.chat_id}::bigint, 'out', 'text', ${text},
+        'queued', now(), ${idempotencyKey ?? null}
+      )
+      on conflict do nothing
+      returning id::text as id
+    `
+    const row = inserted[0]
+    if (row === undefined) {
+      // Гонка двух одинаковых запросов: второй проиграл уникальному ключу.
+      return reply.code(409).send({ error: 'такое сообщение уже отправляется' })
+    }
+
+    await outboundQueue.add('from-agent', {
+      dbMessageId: row.id,
+      channelId: chat.channel_id,
+      externalChatId: chat.external_chat_id,
+      chatId: chat.chat_id,
+      ...(chat.phone !== null && chat.phone !== '' ? { phone: chat.phone } : {}),
+      type: 'text',
+      body: text,
+      publishToAmo: true,
+    })
+
+    logger.info(
+      { leadId, chatId: chat.chat_id, мессенджер: chat.channel_kind },
+      'агент продаж отправляет сообщение',
+    )
+    return { ok: true, messageId: row.id, kind: chat.channel_kind, status: 'queued' }
   })
 
   /** Повторная отправка вручную — кнопка «повторить» в журнале. */

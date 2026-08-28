@@ -7,7 +7,7 @@ import { log } from '../logger/index.js'
 import { getSettings } from '../settings.js'
 import { randomDelay, sleep } from '../utils.js'
 import type { ChannelManager } from '../channels/manager.js'
-import { QUEUE_OUTBOUND, connection } from './index.js'
+import { QUEUE_OUTBOUND, connection, inboundQueue } from './index.js'
 import type { OutboundJob } from './index.js'
 
 const logger = log('outbound')
@@ -97,6 +97,23 @@ export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJo
         await manager
           .markDelivered(out.channelId, externalMessageId)
           .catch((err: unknown) => logger.warn({ err }, 'не удалось отметить доставку'))
+      }
+
+      // Сообщение от агента продаж amoCRM ещё не видела: она про него
+      // ничего не знает, а менеджер должен видеть в карточке весь разговор.
+      // Тот же путь, каким туда попадают ответы менеджера с телефона.
+      if (out.publishToAmo === true && out.chatId !== undefined) {
+        await inboundQueue
+          .add('agent-sent', {
+            dbMessageId: out.dbMessageId,
+            channelId: out.channelId,
+            chatId: out.chatId,
+          })
+          // Клиент сообщение уже получил — падать из-за карточки поздно:
+          // повтор отправил бы текст второй раз.
+          .catch((err: unknown) =>
+            logger.error({ err, messageId: out.dbMessageId }, 'отправлено, но не показано в amoCRM'),
+          )
       }
 
       logger.info({ channelId: out.channelId, externalMessageId }, 'исходящее отправлено')
