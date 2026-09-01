@@ -16,6 +16,22 @@ const logger = log('outbound')
 class PermanentError extends Error {}
 
 /**
+ * Мессенджер счёл нас навязчивыми.
+ *
+ * Настаивать нельзя: каждая следующая попытка ухудшает положение вплоть
+ * до блокировки номера. Поэтому такие ошибки не повторяем, а первые
+ * сообщения с этого номера приостанавливаем на сутки — ответы в уже
+ * идущих переписках при этом продолжают уходить.
+ */
+const ЖАЛОБЫ = ['PEER_FLOOD', 'FLOOD_WAIT', 'USER_PRIVACY_RESTRICTED', 'not-authorized']
+const ПАУЗА_ЧАСОВ = 24
+
+function похоженаЖалобу(err: unknown): boolean {
+  const текст = err instanceof Error ? err.message : String(err)
+  return ЖАЛОБЫ.some((знак) => текст.includes(знак))
+}
+
+/**
  * Счётчик новых чатов на номер в сутки. Первое сообщение незнакомому
  * контакту — самый заметный для WhatsApp признак рассылки, поэтому
  * лимитируем именно его (раздел 5 ТЗ).
@@ -58,6 +74,14 @@ export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJo
       const isNewChat = chat === undefined || chat.first_outbound_at === null
 
       if (isNewChat) {
+        const пауза = await manager.initiatingPausedUntil(out.channelId)
+        if (пауза !== null) {
+          throw new PermanentError(
+            `первые сообщения с этого номера приостановлены до ${пауза.toLocaleString('ru-RU')} — ` +
+              'мессенджер пожаловался на рассылку',
+          )
+        }
+
         const allowed = await reserveNewChatSlot(
           out.channelId,
           settings.newChatsPerNumberPerDay,
@@ -130,7 +154,16 @@ export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJo
 
   worker.on('failed', (job, err) => {
     if (job === undefined) return
-    const permanent = err instanceof PermanentError
+
+    // Жалобу мессенджера повторять нельзя — от этого только хуже.
+    const жалоба = похоженаЖалобу(err)
+    if (жалоба) {
+      void manager
+        .pauseInitiating(job.data.channelId, ПАУЗА_ЧАСОВ)
+        .catch((e: unknown) => logger.error({ err: e }, 'не удалось приостановить первые сообщения'))
+    }
+
+    const permanent = жалоба || err instanceof PermanentError
     const exhausted = job.attemptsMade >= (job.opts.attempts ?? 1)
     if (!permanent && !exhausted) {
       logger.warn({ jobId: job.id, attempt: job.attemptsMade, err: err.message }, 'повторю позже')
@@ -144,10 +177,16 @@ export function createOutboundWorker(manager: ChannelManager): Worker<OutboundJo
       `
       // amoCRM должна показать ошибку в чате, а не «Отправлено».
       await reportUndeliveredByMessage(job.data.dbMessageId, err.message)
-      await alert('error', 'Сообщение не ушло клиенту', {
+      await alert('error', жалоба ? 'Мессенджер счёл нас навязчивыми' : 'Сообщение не ушло клиенту', {
         Номер: job.data.channelId,
         Чат: job.data.externalChatId,
         Причина: err.message,
+        ...(жалоба
+          ? {
+              Сделано: `первые сообщения с этого номера молчат ${ПАУЗА_ЧАСОВ} ч, ответы клиентам идут`,
+              Что_делать: 'написать боту @SpamBot с этого номера и попросить снять ограничение',
+            }
+          : {}),
       })
     })().catch((e: unknown) => logger.error({ err: e }, 'не смог пометить провал отправки'))
   })

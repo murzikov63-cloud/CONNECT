@@ -172,4 +172,26 @@ export const migrations: Migration[] = [
         on messages (agent_ref) where agent_ref is not null;
     `,
   },
+  {
+    name: '006_wa_lid',
+    sql: `
+      -- WhatsApp постепенно прячет телефоны за внутренним номером «…@lid».
+      -- В сообщениях клиента он приходит вместе с телефоном, а в наших
+      -- собственных, отправленных с телефона или из веб-версии, — один,
+      -- без телефона. Чтобы узнать переписку, соответствие надо помнить.
+      alter table chats add column if not exists external_alt_id text;
+      create index if not exists chats_alt_idx on chats (channel_id, external_alt_id);
+    `,
+  },
+  {
+    name: '007_initiate_pause',
+    sql: `
+      -- Мессенджер может пожаловаться, что мы слишком часто пишем первыми
+      -- незнакомым людям. Настаивать нельзя: каждая следующая попытка
+      -- ухудшает положение вплоть до блокировки номера. Поэтому первые
+      -- сообщения с этого номера замолкают до указанного времени,
+      -- а ответы в уже идущих переписках продолжают уходить.
+      alter table channels add column if not exists initiate_paused_until timestamptz;
+    `,
+  },
 ]

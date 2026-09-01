@@ -203,8 +203,18 @@ export function isBroadcastJid(jid: string): boolean {
   return jid.endsWith('@newsletter') || jid.endsWith('@broadcast') || jid === 'status@broadcast'
 }
 
-export function normalizeInbound(channelId: string, msg: any): InboundMessage | null {
-  const externalChatId = realJid(msg?.key)
+/** Внутренний номер WhatsApp из адреса сообщения, если он там. */
+export function lidOf(key: any): string {
+  const jid = String(key?.remoteJid ?? '')
+  return jid.endsWith('@lid') ? jid : ''
+}
+
+export function normalizeInbound(
+  channelId: string,
+  msg: any,
+  jidOverride?: string,
+): InboundMessage | null {
+  const externalChatId = jidOverride ?? realJid(msg?.key)
   const externalMessageId: string = msg?.key?.id ?? ''
   if (externalChatId === '' || externalMessageId === '') return null
   if (isBroadcastJid(externalChatId)) return null
@@ -219,6 +229,7 @@ export function normalizeInbound(channelId: string, msg: any): InboundMessage | 
     externalMessageId,
     externalChatId,
     phone: jidToPhone(externalChatId),
+    ...(lidOf(msg?.key) !== '' ? { altChatId: lidOf(msg?.key) } : {}),
     isGroup: isGroupJid(externalChatId),
     fromMe: msg?.key?.fromMe === true,
     pushName: msg.pushName ?? '',

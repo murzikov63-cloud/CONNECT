@@ -14,7 +14,7 @@ import type { WASocket } from './baileys.js'
 import { CAPABILITIES } from '../channels/types.js'
 import { usePostgresAuthState } from './auth-state.js'
 import { absoluteMediaPath, saveMedia } from './media.js'
-import { extractContent, normalizeInbound } from './normalize.js'
+import { extractContent, lidOf, normalizeInbound, realJid } from './normalize.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -224,9 +224,52 @@ export class WaSession extends EventEmitter {
   /** Насколько старое «своё» сообщение ещё считаем сегодняшним разговором. */
   private static readonly APPEND_MAX_AGE_MS = 10 * 60 * 1000
 
+  /**
+   * Соответствие внутреннего номера WhatsApp телефонному адресу.
+   *
+   * В сообщениях клиента WhatsApp присылает оба, а в наших собственных,
+   * отправленных с телефона или из веб-версии, — только внутренний.
+   * Поэтому пары запоминаем, как только увидим; после перезапуска берём
+   * из базы.
+   */
+  private readonly внутренниеНомера = new Map<string, string>()
+
+  private async адресПереписки(key: any): Promise<string> {
+    const прямой = realJid(key)
+    const внутренний = lidOf(key)
+
+    if (прямой !== '') {
+      if (внутренний !== '') this.внутренниеНомера.set(внутренний, прямой)
+      return прямой
+    }
+    if (внутренний === '') return ''
+
+    const изПамяти = this.внутренниеНомера.get(внутренний)
+    if (изПамяти !== undefined) return изПамяти
+
+    const rows = await sql<{ external_chat_id: string }[]>`
+      select external_chat_id from chats
+      where channel_id = ${this.channelId} and external_alt_id = ${внутренний}
+      limit 1
+    `
+    const изБазы = rows[0]?.external_chat_id
+    if (изБазы === undefined) return ''
+    this.внутренниеНомера.set(внутренний, изБазы)
+    return изБазы
+  }
+
   private async handleIncoming(msg: any): Promise<void> {
-    const normalized = normalizeInbound(this.channelId, msg)
-    if (normalized === null) return
+    const адрес = await this.адресПереписки(msg?.key)
+    const normalized = normalizeInbound(this.channelId, msg, адрес === '' ? undefined : адрес)
+    if (normalized === null) {
+      if (msg?.key?.fromMe === true) {
+        this.logger.info(
+          { внутренний: lidOf(msg?.key) },
+          'не знаю, кому писали: внутренний номер WhatsApp ещё не встречался',
+        )
+      }
+      return
+    }
 
     const content = extractContent(msg.message)
     if (content.mediaKind !== undefined) {

@@ -403,12 +403,18 @@ export class ChannelManager extends EventEmitter {
 
   private async upsertChat(msg: InboundMessage): Promise<ChatRow> {
     const rows = await sql<ChatRow[]>`
-      insert into chats (channel_id, external_chat_id, phone, push_name, is_group, last_message_at)
+      insert into chats (
+        channel_id, external_chat_id, external_alt_id, phone, push_name, is_group, last_message_at
+      )
       values (
-        ${msg.channelId}, ${msg.externalChatId}, ${msg.phone === '' ? null : msg.phone},
+        ${msg.channelId}, ${msg.externalChatId}, ${msg.altChatId ?? null},
+        ${msg.phone === '' ? null : msg.phone},
         ${msg.pushName === '' ? null : msg.pushName}, ${msg.isGroup}, ${msg.occurredAt}
       )
       on conflict (channel_id, external_chat_id) do update set
+        -- Внутренний номер WhatsApp узнаём из сообщений клиента: без него
+        -- не опознать переписку в своих же, отправленных с телефона.
+        external_alt_id = coalesce(excluded.external_alt_id, chats.external_alt_id),
         push_name = coalesce(nullif(excluded.push_name, ''), chats.push_name),
         last_message_at = greatest(coalesce(chats.last_message_at, excluded.last_message_at), excluded.last_message_at),
         updated_at = now()
@@ -546,6 +552,29 @@ export class ChannelManager extends EventEmitter {
     if (rows.length > 0) {
       logger.info({ channelId, count: rows.length }, 'собеседник прочитал сообщения')
     }
+  }
+
+  /**
+   * Замолкаем первыми сообщениями с этого номера: мессенджер пожаловался.
+   * Ответы в уже идущих переписках продолжают уходить — их рассылкой
+   * никто не считает.
+   */
+  async pauseInitiating(channelId: string, hours: number): Promise<void> {
+    await sql`
+      update channels
+      set initiate_paused_until = now() + make_interval(hours => ${hours}), updated_at = now()
+      where id = ${channelId}
+    `
+    logger.warn({ channelId, hours }, 'первые сообщения с номера приостановлены')
+  }
+
+  /** До какого времени первые сообщения с номера молчат. null — можно писать. */
+  async initiatingPausedUntil(channelId: string): Promise<Date | null> {
+    const rows = await sql<{ until: Date | null }[]>`
+      select initiate_paused_until as until from channels
+      where id = ${channelId} and initiate_paused_until > now()
+    `
+    return rows[0]?.until ?? null
   }
 
   async shutdown(): Promise<void> {
