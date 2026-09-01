@@ -211,6 +211,14 @@ async function позватьАгента(row: Row): Promise<void> {
         event: 'client_reply',
         text: row.body ?? '',
         kind: row.channel_kind,
+        // Голосовое от клиента приходит без текста вовсе. Без типа и ссылки
+        // на файл агент видел пустую реплику и отвечал невпопад — расшифровать
+        // её n8n может только по ссылке.
+        type: row.type,
+        ...(toPublicUrl(row.media_path) !== undefined
+          ? { mediaUrl: toPublicUrl(row.media_path) }
+          : {}),
+        fileName: row.media_name ?? undefined,
       }),
       signal: AbortSignal.timeout(10_000),
     })
