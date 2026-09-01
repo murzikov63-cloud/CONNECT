@@ -106,6 +106,9 @@ export async function openChatForLead(
   // чем перебрать все телефоны в первом попавшемся.
   for (const k of kinds) {
     for (const t of targets) {
+      // Без добавления в контакты: агент пишет многим, а массовый поиск
+      // по номерам мессенджеры считают рассылкой. Если человек закрыл
+      // поиск по номеру, агент до него не достучится — и это правильно.
       const opened = await manager.openChatByPhone(k, t.phone, t.name)
       if (opened === null) continue
 

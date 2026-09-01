@@ -289,7 +289,11 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
    * Сначала пробуем спросить напрямую, и только потом — через добавление
    * в контакты: второй способ показывает наш номер собеседнику.
    */
-  async findChatByPhone(phone: string): Promise<string | null> {
+  async findChatByPhone(
+    phone: string,
+    _name?: string,
+    opts?: { deep?: boolean },
+  ): Promise<string | null> {
     const client = this.client
     if (client === null || !this.ready) throw new Error(`Канал ${this.label} не в сети`)
     const digits = phone.replace(/\D/g, '')
@@ -302,6 +306,11 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
     } catch (err) {
       this.logger.info({ err: String(err).slice(0, 120) }, 'по номеру напрямую не нашёлся')
     }
+
+    // Добавление в контакты Телеграм замечает особенно охотно. Делаем это
+    // только когда менеджер сам решил написать человеку, и никогда — при
+    // фоновой подготовке карточек.
+    if (opts?.deep !== true) return null
 
     try {
       const imported = await client.invoke(

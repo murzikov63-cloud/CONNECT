@@ -637,6 +637,9 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
         amoChannel.kind,
         parsed.receiverPhone,
         parsed.receiverName,
+        // Менеджер сам решил написать этому человеку — можно искать
+        // всеми способами, включая добавление в контакты.
+        { deep: true },
       )
       if (opened !== null) {
         // Отвечать клиент будет в ту же беседу, что видит менеджер.

@@ -205,6 +205,7 @@ export class ChannelManager extends EventEmitter {
     kind: ChannelKind,
     phone: string,
     name: string,
+    opts?: { deep?: boolean },
   ): Promise<{ chat_id: string; channel_id: string; external_chat_id: string } | null> {
     const digits = toInternationalPhone(phone)
     if (digits === '') return null
@@ -217,11 +218,20 @@ export class ChannelManager extends EventEmitter {
       return null
     }
 
-    const driver = this.drivers.get(channelId)
-    const externalChatId = await driver?.findChatByPhone?.(digits, name).catch((err: unknown) => {
-      logger.error({ err, kind }, 'поиск собеседника по номеру не удался')
+    // Номер уже получил замечание за навязчивость — не ищем никого, пока
+    // не отлежится. Иначе поиском по номерам доведём дело до блокировки.
+    if ((await this.initiatingPausedUntil(channelId)) !== null) {
+      logger.info({ kind }, 'поиск по номеру отложен: мессенджер жаловался')
       return null
-    })
+    }
+
+    const driver = this.drivers.get(channelId)
+    const externalChatId = await driver
+      ?.findChatByPhone?.(digits, name, { deep: opts?.deep === true })
+      .catch((err: unknown) => {
+        logger.error({ err, kind }, 'поиск собеседника по номеру не удался')
+        return null
+      })
     if (externalChatId === null || externalChatId === undefined || externalChatId === '') {
       logger.info({ kind, phone: digits }, 'в этом мессенджере такого номера нет')
       return null
