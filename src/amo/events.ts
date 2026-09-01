@@ -7,6 +7,7 @@ import { channelForKind } from './channels.js'
 import { createChat } from './chat-client.js'
 import {
   contactExists,
+  leadPreferredMessenger,
   contactPhones,
   leadContactIds,
   linkChatToContact,
@@ -28,7 +29,6 @@ const logger = log('amo-events')
  * можно написать, а куда нельзя.
  */
 
-const KINDS: ChannelKind[] = ['telegram', 'whatsapp', 'max']
 
 /** Отличает новое имя беседы от прежних. Время годится: оно не повторится. */
 function counter(): number {
@@ -89,6 +89,7 @@ export async function ensureSubscription(): Promise<void> {
 export async function openChatsForContact(
   manager: ChannelManager,
   contactId: number,
+  kinds: ChannelKind[],
 ): Promise<void> {
   if (вРаботе.has(contactId)) {
     logger.info({ contactId }, 'этим контактом уже занимаемся, второй заход пропускаю')
@@ -96,13 +97,17 @@ export async function openChatsForContact(
   }
   вРаботе.add(contactId)
   try {
-    await openChats(manager, contactId)
+    await openChats(manager, contactId, kinds)
   } finally {
     вРаботе.delete(contactId)
   }
 }
 
-async function openChats(manager: ChannelManager, contactId: number): Promise<void> {
+async function openChats(
+  manager: ChannelManager,
+  contactId: number,
+  kinds: ChannelKind[],
+): Promise<void> {
   const { name, phones } = await contactPhones(contactId)
   if (phones.length === 0) {
     logger.info({ contactId }, 'у контакта нет телефона, писать некуда')
@@ -110,7 +115,7 @@ async function openChats(manager: ChannelManager, contactId: number): Promise<vo
   }
 
   for (const phone of phones) {
-    for (const kind of KINDS) {
+    for (const kind of kinds) {
       await openOne(manager, contactId, kind, phone, name).catch((err: unknown) =>
         logger.warn({ err, kind, contactId }, 'не удалось завести беседу'),
       )
@@ -185,22 +190,43 @@ async function openOne(
   logger.info({ kind, contactId, chatId: opened.chat_id }, 'беседа заведена в карточке')
 }
 
-/** Разбирает событие целиком: и новые контакты, и контакты новых сделок. */
+/**
+ * Разбирает событие: заводим переписку только в том мессенджере, который
+ * клиент назвал сам в заявке.
+ *
+ * Заводить сразу во всех трёх — плохая мысль: чтобы завести переписку,
+ * человека надо найти по номеру, а массовый поиск мессенджеры считают
+ * рассылкой. Телеграм за это ограничил нам номер 1 сентября. Остальные
+ * мессенджеры включим позже и по делу — например, на другом этапе
+ * воронки, если клиент не отвечает в своём.
+ */
 export async function handleEvent(manager: ChannelManager, raw: string): Promise<void> {
   const { contacts, leads } = parseEvent(raw)
-  const ids = new Set(contacts)
 
   for (const leadId of leads) {
+    const выбор = await leadPreferredMessenger(leadId).catch((err: unknown) => {
+      logger.warn({ err, leadId }, 'не смог прочитать выбранный клиентом мессенджер')
+      return null
+    })
+    if (выбор === null) {
+      logger.info({ leadId }, 'клиент не назвал мессенджер — переписку пока не заводим')
+      continue
+    }
+
     const linked = await leadContactIds(leadId).catch((err: unknown) => {
       logger.warn({ err, leadId }, 'не смог узнать контакты сделки')
       return [] as number[]
     })
-    for (const id of linked) ids.add(id)
+    for (const id of linked) {
+      await openChatsForContact(manager, id, [выбор]).catch((err: unknown) =>
+        logger.error({ err, contactId: id }, 'не удалось завести беседу контакту'),
+      )
+    }
   }
 
-  for (const id of ids) {
-    await openChatsForContact(manager, id).catch((err: unknown) =>
-      logger.error({ err, contactId: id }, 'не удалось завести беседы контакту'),
-    )
+  // Контакт без сделки: чем пользуется человек — неизвестно, а угадывать
+  // поиском по номерам мы больше не будем.
+  if (contacts.length > 0 && leads.length === 0) {
+    logger.info({ контактов: contacts.length }, 'контакт без сделки — мессенджер неизвестен, жду')
   }
 }
