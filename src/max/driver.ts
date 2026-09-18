@@ -5,7 +5,7 @@ import type { ChannelDriver } from '../channels/types.js'
 import { config } from '../config/index.js'
 import { log } from '../logger/index.js'
 import type { InboundMessage, MessageType, OutboundMessage } from '../types.js'
-import { absoluteMediaPath, extForMime, saveMedia } from '../wa/media.js'
+import { outgoingLocalFile } from '../wa/media.js'
 
 /**
  * Канал мессенджера MAX.
@@ -181,33 +181,10 @@ export class MaxDriver extends EventEmitter implements ChannelDriver {
     this.emit('inbound', msg)
   }
 
-  /**
-   * Готовит вложение к отправке.
-   *
-   * Служба MAX умеет отправлять только файл с диска: ей нужно знать его
-   * размер. amoCRM же присылает ссылку. Поэтому файл по ссылке сначала
-   * скачиваем в общий том — служба видит его по тому же пути, что и мы.
-   */
-  private async localFile(out: OutboundMessage): Promise<string | undefined> {
-    const path = out.mediaPath
-    if (path === undefined || path === '') return undefined
-    if (!path.startsWith('http')) return absoluteMediaPath(path)
-
-    const response = await fetch(path)
-    if (!response.ok) {
-      throw new Error(`вложение не скачалось из amoCRM: HTTP ${response.status}`)
-    }
-    const mime = out.mediaMime ?? response.headers.get('content-type') ?? 'application/octet-stream'
-    const buffer = Buffer.from(await response.arrayBuffer())
-    const name = out.mediaName ?? `вложение.${extForMime(mime)}`
-    const saved = await saveMedia(this.channelId, `out-${Date.now()}`, buffer, mime, name)
-    return absoluteMediaPath(saved.path)
-  }
-
   async send(out: OutboundMessage): Promise<string> {
     if (this.status !== 'online') throw new Error(`Канал ${this.label} не в сети`)
 
-    const filePath = await this.localFile(out)
+    const filePath = await outgoingLocalFile(this.channelId, out)
     const result = await this.bridge<{ messageId: string }>('POST', '/send', {
       chatId: out.externalChatId,
       text: out.body === '' ? null : out.body,

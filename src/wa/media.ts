@@ -74,6 +74,34 @@ export async function saveMedia(
   }
 }
 
+/**
+ * Готовит вложение к отправке: путь к файлу на диске.
+ *
+ * amoCRM присылает не файл, а ссылку на своё хранилище — и она закрыта
+ * для посторонних. Мессенджеру такую ссылку давать нельзя: он пойдёт
+ * качать сам, получит отказ и вернёт непонятную ошибку. Телеграм отвечает
+ * на это WEBPAGE_CURL_FAILED, MAX — молча падает. Поэтому файл скачиваем
+ * сами и передаём уже готовым.
+ */
+export async function outgoingLocalFile(
+  channelId: string,
+  out: { mediaPath?: string; mediaMime?: string; mediaName?: string },
+): Promise<string | undefined> {
+  const path = out.mediaPath
+  if (path === undefined || path === '') return undefined
+  if (!path.startsWith('http')) return absoluteMediaPath(path)
+
+  const response = await fetch(path)
+  if (!response.ok) {
+    throw new Error(`вложение не скачалось из amoCRM: HTTP ${response.status}`)
+  }
+  const mime = out.mediaMime ?? response.headers.get('content-type') ?? 'application/octet-stream'
+  const buffer = Buffer.from(await response.arrayBuffer())
+  const name = out.mediaName ?? `вложение.${extForMime(mime)}`
+  const saved = await saveMedia(channelId, `out-${Date.now()}`, buffer, mime, name)
+  return absoluteMediaPath(saved.path)
+}
+
 export function absoluteMediaPath(relPath: string): string {
   return join(config.MEDIA_DIR, relPath)
 }

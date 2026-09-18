@@ -5,7 +5,7 @@ import { log } from '../logger/index.js'
 import { CAPABILITIES } from '../channels/types.js'
 import type { ChannelDriver } from '../channels/types.js'
 import type { MediaPayload, OutboundMessage } from '../types.js'
-import { absoluteMediaPath, saveMedia } from '../wa/media.js'
+import { outgoingLocalFile, saveMedia } from '../wa/media.js'
 import { loadSession, saveSession } from './auth-state.js'
 import { Api, NewMessage, Raw, StringSession, TelegramClient, bigInt } from './gramjs.js'
 import type { TgClient } from './gramjs.js'
@@ -362,11 +362,16 @@ export class TelegramDriver extends EventEmitter implements ChannelDriver {
       options['replyTo'] = Number(out.quotedExternalMessageId)
     }
     if (out.mediaPath !== undefined) {
-      options['file'] = out.mediaPath.startsWith('http')
-        ? out.mediaPath
-        : absoluteMediaPath(out.mediaPath)
+      // Ссылку Телеграму не даём: хранилище amoCRM закрыто для посторонних,
+      // и он отвечает WEBPAGE_CURL_FAILED. Скачиваем файл сами.
+      options['file'] = await outgoingLocalFile(this.channelId, out)
       // Голосовые Телеграм показывает кружком-дорожкой только с этим признаком.
       if (out.type === 'voice') options['voiceNote'] = true
+      // Имя файла берём из amoCRM: иначе клиент получит «out-1758…pdf»
+      // вместо «КП Жк Живописный, кв. 412.pdf».
+      if (out.mediaName !== undefined && out.mediaName !== '' && out.type !== 'voice') {
+        options['attributes'] = [new Api.DocumentAttributeFilename({ fileName: out.mediaName })]
+      }
     }
 
     const sent = await client.sendMessage(peer, options)
