@@ -14,7 +14,7 @@ import type { WASocket } from './baileys.js'
 import { CAPABILITIES } from '../channels/types.js'
 import { usePostgresAuthState } from './auth-state.js'
 import { absoluteMediaPath, saveMedia } from './media.js'
-import { extractContent, lidOf, normalizeInbound, realJid } from './normalize.js'
+import { extractContent, jidToPhone, lidOf, normalizeInbound, realJid } from './normalize.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -357,6 +357,55 @@ export class WaSession extends EventEmitter {
     return body == null || body === '' ? undefined : { conversation: body }
   }
 
+  /**
+   * Адрес, по которому WhatsApp сейчас доставляет сообщения.
+   *
+   * WhatsApp переводит людей с телефонных адресов на внутренние («…@lid»)
+   * и со временем перестаёт доставлять по старому: сервер сообщение
+   * принимает, отвечает номером, но до телефона оно не доходит — ни
+   * доставки, ни прочтения. Поэтому пишем по внутреннему, если он известен,
+   * а телефонный держим про запас.
+   */
+  private async адресОтправки(externalChatId: string): Promise<string[]> {
+    if (externalChatId.endsWith('@lid')) return [externalChatId]
+    const rows = await sql<{ external_alt_id: string | null }[]>`
+      select external_alt_id from chats
+      where channel_id = ${this.channelId} and external_chat_id = ${externalChatId}
+      limit 1
+    `
+    const внутренний = rows[0]?.external_alt_id
+    if (внутренний != null && внутренний !== '') return [внутренний, externalChatId]
+
+    // Внутреннего адреса ещё не знаем — он появляется из сообщений клиента,
+    // а тем, кто нам не писал, взять его неоткуда. Спрашиваем у WhatsApp
+    // и запоминаем: один запрос на переписку за всё время.
+    const узнанный = await this.спроситьВнутреннийАдрес(externalChatId)
+    return узнанный === null ? [externalChatId] : [узнанный, externalChatId]
+  }
+
+  private async спроситьВнутреннийАдрес(externalChatId: string): Promise<string | null> {
+    const sock = this.sock
+    const phone = jidToPhone(externalChatId)
+    if (sock === null || phone === '') return null
+
+    try {
+      const found = await sock.onWhatsApp(phone)
+      const lid = String((found?.[0] as { lid?: string } | undefined)?.lid ?? '')
+      if (!lid.endsWith('@lid')) return null
+
+      await sql`
+        update chats set external_alt_id = ${lid}, updated_at = now()
+        where channel_id = ${this.channelId} and external_chat_id = ${externalChatId}
+      `
+      this.внутренниеНомера.set(lid, externalChatId)
+      this.logger.info({ phone }, 'узнал внутренний адрес WhatsApp и запомнил')
+      return lid
+    } catch (err) {
+      this.logger.warn({ err, phone }, 'не смог узнать внутренний адрес WhatsApp')
+      return null
+    }
+  }
+
   async send(out: OutboundMessage): Promise<string> {
     const sock = this.sock
     if (sock === null) throw new Error(`Сессия ${this.label} не поднята`)
@@ -370,19 +419,33 @@ export class WaSession extends EventEmitter {
       }
     }
 
+    const адреса = await this.адресОтправки(out.externalChatId)
+
     // Печатающий статус перед отправкой — выглядит естественнее.
     try {
-      await sock.sendPresenceUpdate('composing', out.externalChatId)
+      await sock.sendPresenceUpdate('composing', адреса[0] as string)
     } catch {
       /* презенс не критичен */
     }
 
-    const sent = await sock.sendMessage(out.externalChatId, content as any, options as any)
-    const id: string = (sent as any)?.key?.id ?? ''
-    if (id === '') throw new Error('WhatsApp не вернул id отправленного сообщения')
-    // Запоминаем на случай просьбы прислать заново.
-    this.remember(id, (sent as any)?.message)
-    return id
+    let последняя: unknown = null
+    for (const адрес of адреса) {
+      try {
+        const sent = await sock.sendMessage(адрес, content as any, options as any)
+        const id: string = (sent as any)?.key?.id ?? ''
+        if (id === '') throw new Error('WhatsApp не вернул id отправленного сообщения')
+        if (адрес !== out.externalChatId) {
+          this.logger.info({ адрес }, 'отправлено по внутреннему адресу WhatsApp')
+        }
+        // Запоминаем на случай просьбы прислать заново.
+        this.remember(id, (sent as any)?.message)
+        return id
+      } catch (err) {
+        последняя = err
+        this.logger.warn({ err, адрес }, 'по этому адресу отправить не вышло, пробую запасной')
+      }
+    }
+    throw последняя instanceof Error ? последняя : new Error('WhatsApp не принял сообщение')
   }
 
   private buildContent(out: OutboundMessage): Record<string, unknown> {
