@@ -11,6 +11,7 @@ import type { DeliveryStatus } from './types.js'
 import { ensureSubscription } from './amo/events.js'
 import { createOutboundWorker } from './queue/outbound.js'
 import { cleanupOldMedia } from './wa/media.js'
+import { запуститьЕжедневнуюСводку } from './health/daily.js'
 import { ChannelManager } from './channels/manager.js'
 
 const logger = log('boot')
@@ -63,6 +64,9 @@ async function main(): Promise<void> {
     logger.error({ err }, 'не удалось подписаться на события amoCRM'),
   )
 
+  // Ежедневная сводка: ловит тихие поломки, о которых тревоги молчат.
+  const остановитьСводку = запуститьЕжедневнуюСводку()
+
   const mediaCleanup = setInterval(
     () => {
       void cleanupOldMedia().catch((err: unknown) =>
@@ -78,6 +82,7 @@ async function main(): Promise<void> {
     shuttingDown = true
     logger.info({ signal }, 'останавливаюсь')
     clearInterval(mediaCleanup)
+    остановитьСводку()
     await app.close()
     await outboundWorker.close()
     await inboundWorker.close()

@@ -34,6 +34,7 @@ import {
   revokeGuestPassword,
 } from './guest.js'
 import { handleEvent } from '../amo/events.js'
+import { собратьСводку, отправитьСводку } from '../health/daily.js'
 import { openapi } from './openapi.js'
 import {
   checkPassword,
@@ -479,7 +480,10 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     `
     const msg = rows[0]
     if (msg === undefined) return reply.code(404).send({ error: 'исходящее сообщение не найдено' })
-    if (msg.status === 'sent' || msg.status === 'delivered' || msg.status === 'read') {
+    // «Отправлено» — это не «доставлено»: мессенджер лишь принял сообщение
+    // у нас. Оно может навсегда зависнуть в пути, как было в сентябре,
+    // когда WhatsApp сменил адресацию. Повторять такие разрешаем.
+    if (msg.status === 'delivered' || msg.status === 'read') {
       return reply.code(409).send({ error: 'это сообщение уже доставлено' })
     }
 
@@ -707,6 +711,15 @@ export async function buildServer(manager: ChannelManager): Promise<FastifyInsta
     })
 
     return reply.code(200).send({ ok: true })
+  })
+
+  /** Сводка о работе сервиса — та же, что приходит в Телеграм по утрам. */
+  app.get('/api/daily', guarded, async () => собратьСводку())
+
+  /** Прислать сводку в Телеграм прямо сейчас, не дожидаясь утра. */
+  app.post('/api/daily/send', guarded, async () => {
+    await отправитьСводку()
+    return { ok: true }
   })
 
   // --- события amoCRM ---------------------------------------------------
