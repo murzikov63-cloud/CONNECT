@@ -16,6 +16,16 @@ const logger = log('daily')
  * не копится ли очередь.
  */
 
+/** Что происходит в одном мессенджере за сутки. */
+export interface ПоМессенджеру {
+  мессенджер: string
+  вСети: boolean
+  входящих: number
+  исходящих: number
+  неУшло: number
+  зависших: number
+}
+
 export interface Сводка {
   каналыВсего: number
   каналыВСети: number
@@ -26,14 +36,15 @@ export interface Сводка {
   зависших: number
   вОчереди: number
   чатыAmo: boolean
+  мессенджеры: ПоМессенджеру[]
 }
 
 /** Сколько часов ждём подтверждения доставки, прежде чем считать зависшим. */
 export const ЖДЁМ_ЧАСОВ = 4
 
 export async function собратьСводку(): Promise<Сводка> {
-  const каналы = await sql<{ label: string; status: string }[]>`
-    select label, status from channels where deleted_at is null and status <> 'new'
+  const каналы = await sql<{ label: string; status: string; kind: string }[]>`
+    select label, status, kind from channels where deleted_at is null and status <> 'new'
   `
   const сообщения = await sql<
     { входящих: string; исходящих: string; не_ушло: string; в_очереди: string }[]
@@ -55,8 +66,52 @@ export async function собратьСводку(): Promise<Сводка> {
       and created_at < now() - make_interval(hours => ${ЖДЁМ_ЧАСОВ})
   `
 
+  // Разбивка по мессенджерам: в общей цифре поломка одного канала тонет.
+  // В сентябре перестал доставлять только WhatsApp, а Телеграм и MAX
+  // работали — вместе это выглядело бы как обычный день.
+  const поМессенджерам = await sql<
+    {
+      kind: string
+      входящих: string
+      исходящих: string
+      не_ушло: string
+      зависших: string
+    }[]
+  >`
+    select ch.kind,
+      count(*) filter (where m.direction = 'in')::text  as входящих,
+      count(*) filter (where m.direction = 'out')::text as исходящих,
+      count(*) filter (where m.status = 'failed')::text as не_ушло,
+      count(*) filter (
+        where m.direction = 'out' and m.status = 'sent'
+          and m.delivered_at is null and m.read_at is null
+          and m.created_at < now() - make_interval(hours => ${ЖДЁМ_ЧАСОВ})
+      )::text as зависших
+    from channels ch
+    left join messages m
+      on m.channel_id = ch.id and m.created_at > now() - interval '24 hours'
+    where ch.deleted_at is null and ch.status <> 'new'
+    group by ch.kind
+    order by ch.kind
+  `
+
+  const названия: Record<string, string> = {
+    whatsapp: 'WhatsApp',
+    telegram: 'Телеграм',
+    max: 'MAX',
+  }
+  const вСети = new Set(каналы.filter((c) => c.status === 'online').map((c) => c.kind))
+
   const строка = сообщения[0]
   return {
+    мессенджеры: поМессенджерам.map((r) => ({
+      мессенджер: названия[r.kind] ?? r.kind,
+      вСети: вСети.has(r.kind),
+      входящих: Number(r.входящих),
+      исходящих: Number(r.исходящих),
+      неУшло: Number(r.не_ушло),
+      зависших: Number(r.зависших),
+    })),
     каналыВсего: каналы.length,
     каналыВСети: каналы.filter((c) => c.status === 'online').length,
     отвалились: каналы.filter((c) => c.status !== 'online').map((c) => c.label),
@@ -89,8 +144,16 @@ export async function отправитьСводку(): Promise<void> {
   const детали: Record<string, unknown> = {
     Каналы: `${с.каналыВСети} из ${с.каналыВсего} в сети`,
     'За сутки': `${с.входящих} входящих, ${с.исходящих} исходящих`,
-    'Висят в пути': с.зависших,
-    'Не ушло': с.неУшло,
+  }
+  // Каждый мессенджер отдельной строкой: так видно, который из них молчит.
+  for (const м of с.мессенджеры) {
+    const хвост = [
+      м.вСети ? null : 'не в сети',
+      м.зависших > 0 ? `${м.зависших} висят` : null,
+      м.неУшло > 0 ? `${м.неУшло} не ушло` : null,
+    ].filter((x) => x !== null)
+    детали[м.мессенджер] =
+      `${м.входящих} вх, ${м.исходящих} исх` + (хвост.length > 0 ? ` — ${хвост.join(', ')}` : '')
   }
   if (поводы.length > 0) детали['Что проверить'] = поводы.join('; ')
 
