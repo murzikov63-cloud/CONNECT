@@ -56,11 +56,15 @@ export async function собратьСводку(): Promise<Сводка> {
       count(*) filter (where status = 'queued')::text as в_очереди
     from messages
   `
-  // Зависшие: мессенджер принял, но подтверждения так и нет. Смотрим только
-  // за сутки, чтобы в сводку не попадали следы прошлых поломок.
+  // Зависшие: мы отправили, мессенджер принял, а подтверждения так и нет.
+  //
+  // Считаем только свои отправки. Менеджер вполне может написать клиенту
+  // сам с телефона — такое сообщение мы лишь копируем в карточку,
+  // отправляли его не мы, и подтверждения по нему нам никто не пришлёт.
+  // Отличаем по отметке времени отправки: у своих она есть, у чужих нет.
   const зависшие = await sql<{ n: string }[]>`
     select count(*)::text as n from messages
-    where direction = 'out' and status = 'sent'
+    where direction = 'out' and status = 'sent' and sent_at is not null
       and delivered_at is null and read_at is null
       and created_at > now() - interval '24 hours'
       and created_at < now() - make_interval(hours => ${ЖДЁМ_ЧАСОВ})
@@ -83,7 +87,7 @@ export async function собратьСводку(): Promise<Сводка> {
       count(*) filter (where m.direction = 'out')::text as исходящих,
       count(*) filter (where m.status = 'failed')::text as не_ушло,
       count(*) filter (
-        where m.direction = 'out' and m.status = 'sent'
+        where m.direction = 'out' and m.status = 'sent' and m.sent_at is not null
           and m.delivered_at is null and m.read_at is null
           and m.created_at < now() - make_interval(hours => ${ЖДЁМ_ЧАСОВ})
       )::text as зависших
