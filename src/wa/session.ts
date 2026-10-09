@@ -182,6 +182,21 @@ export class WaSession extends EventEmitter {
       return
     }
 
+    // 515 — «перезапустите соединение». Так WhatsApp всегда отвечает сразу
+    // после привязки телефона, и ждать тут нельзя ни секунды: свежая
+    // привязка живёт считанные мгновения. Мы же к этому времени успевали
+    // набрать полтора десятка неудачных попыток, ждали между ними минуту —
+    // и возвращались к уже аннулированной привязке с ответом «разлогинены».
+    // Из-за этого номер не подключался вовсе: привязка проходила, а через
+    // минуту её не было.
+    if (statusCode === DisconnectReason['restartRequired']) {
+      this.logger.info({}, 'связывание прошло, перезапускаю соединение сразу')
+      this.reconnectAttempt = 0
+      this.emit('status', 'connecting', {})
+      if (!this.stopping) this.scheduleReconnect(0)
+      return
+    }
+
     this.emit('status', 'offline', { reason })
     if (!this.stopping) this.scheduleReconnect()
   }
@@ -192,9 +207,10 @@ export class WaSession extends EventEmitter {
     return named !== undefined ? `${named} (${code})` : `код ${code}`
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(сразу?: 0): void {
     if (this.reconnectTimer !== null) return
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempt, RECONNECT_MAX_MS)
+    const delay =
+      сразу === 0 ? 0 : Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempt, RECONNECT_MAX_MS)
     this.reconnectAttempt++
     this.logger.info({ delay, attempt: this.reconnectAttempt }, 'переподключение')
     this.reconnectTimer = setTimeout(() => {
@@ -517,7 +533,9 @@ export class WaSession extends EventEmitter {
       this.reconnectTimer = null
     }
     try {
-      this.sock?.end(undefined)
+      // В новой версии библиотеки закрытие стало отложенным: дожидаться
+      // его здесь незачем, остановка не должна ничего ждать.
+      void this.sock?.end(undefined)
     } catch {
       /* сокет уже закрыт */
     }
