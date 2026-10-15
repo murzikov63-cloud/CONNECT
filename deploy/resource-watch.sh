@@ -73,7 +73,9 @@ if command -v docker >/dev/null 2>&1 && [ -f "$PROJECT_DIR/docker-compose.yml" ]
   running=$(cd "$PROJECT_DIR" && docker compose ps --services --status running 2>/dev/null || true)
   expected=$(cd "$PROJECT_DIR" && docker compose config --services 2>/dev/null || true)
   for svc in $expected; do
-    if ! echo "$running" | grep -qx "$svc"; then
+    # Без конвейера: при pipefail grep -q закрывает трубу раньше echo,
+    # echo получает Broken pipe, и живой контейнер считается упавшим.
+    if ! grep -qx "$svc" <<<"$running"; then
       notify "down-$svc" "🔴 Messenger: контейнер $svc не работает."
     else
       clear_stamp "down-$svc"
