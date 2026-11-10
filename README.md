@@ -18,9 +18,28 @@
 
 - ТЗ: `../TZ-wa-amocrm-bridge.md`
 - Публичный адрес: https://connect.indolight.com
-- Сервер: **164.92.173.81**, DigitalOcean FRA1, Ubuntu 24.04, 2 ГБ / 50 ГБ NVMe
-- Вход только по ключу `~/.ssh/messenger-connect` на TONYAI, пароль отключён
+- **Где живёт: на TONYAI** (с 10.11.2026), рядом с остальными нашими сервисами.
+  Наружу — через Cloudflare Tunnel `cloudflared-n8n`, он ведёт адрес
+  на `127.0.0.1:3400`. Запуск и выкладка — `deploy/tonyai.sh`.
 - Аккаунт amoCRM: murzikov63.amocrm.ru (ID 28694251)
+
+### Почему на TONYAI, а не на своём сервере
+
+Мессенджерами пользуемся редко, и платить за отдельный сервер незачем.
+Цена: дома бывают обрывы интернета, и на это время мост недоступен —
+клиентские сообщения мессенджеры отдадут, когда связь вернётся, а вот
+ответы менеджеров из amoCRM в эти минуты могут не уйти.
+
+**Когда начнём работать активно — вернуть на отдельный сервер.** Всё для
+этого осталось: `docker-compose.yml` и `caddy/Caddyfile` описывают
+самостоятельный сервер со своими портами 80/443, `deploy/deploy-backend.sh`
+выкладывает туда. Переезд — снимок базы, тома `media` и `maxsessions`,
+перенос `.env`, переключение записи DNS. Номера при этом переподключать
+не нужно, ключи едут в базе. Главное — **не держать сервис запущенным
+в двух местах одновременно**: два подключения на одних ключах ломают номер.
+
+Прежний сервер: 164.92.173.81, DigitalOcean FRA1, 2 ГБ / 50 ГБ, ключ
+`~/.ssh/messenger-connect` (до 10.11.2026).
 
 > ⚠️ Долгосрочный токен amoCRM годен до **2027-02-28**. Перевыпустить в январе 2027,
 > иначе связь с CRM встанет. Секреты — только в `.env` (в git не попадает).
@@ -177,9 +196,19 @@
 
 ## Куда смотреть при разборе
 
-    ssh -i ~/.ssh/messenger-connect root@164.92.173.81
-    cd /opt/messenger-connect
-    docker compose ps
-    docker compose logs app --tail 50
-    docker compose logs max-bridge --tail 50
-    docker compose exec caddy sh -c 'grep amoJo /data/access.log | tail'
+    deploy/tonyai.sh ps
+    deploy/tonyai.sh logs app --tail 50
+    deploy/tonyai.sh logs max-bridge --tail 50
+    docker exec messenger-connect-postgres-1 sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+    docker exec messenger-connect-caddy-1 sh -c 'grep amoJo /data/access.log | tail'
+
+Сводка о состоянии: `GET /api/daily` с заголовком `X-Api-Key`.
+
+## Резервные копии
+
+Каждую ночь в 04:00 таймер `messenger-backup` кладёт снимок базы
+и сессию MAX в `backups/nightly/` (`deploy/backup-tonyai.sh`, хранится
+14 дней), а в 04:30 общий бэкап проектов увозит их на диск Windows
+и в Google Drive. В базе — ключи подключения номеров: без копии потеря
+базы означает заново сканировать коды с телефонов. Вложения клиентов
+не копируются — amoCRM хранит свои.

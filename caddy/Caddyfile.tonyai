@@ -1,0 +1,54 @@
+# Привратник на TONYAI.
+#
+# Здесь сервис выходит наружу через Cloudflare Tunnel, как и остальные наши
+# сервисы на этой машине: туннель шифрует сам и приходит к нам обычным HTTP
+# на локальный порт. Поэтому своего сертификата нет, а маршруты — те же,
+# что и на отдельном сервере (caddy/Caddyfile). Меняешь маршрут там —
+# поменяй и здесь.
+
+:80 {
+	encode zstd gzip
+
+	# Настоящий IP клиента Cloudflare кладёт в этот заголовок.
+	request_header X-Real-IP {header.CF-Connecting-IP}
+
+	# Вебхуки amoCRM (amojo) — подпись проверяется в самом приложении
+	handle /amojo/* {
+		reverse_proxy app:3000
+	}
+
+	# OAuth callback amoCRM
+	handle /amocrm/* {
+		reverse_proxy app:3000
+	}
+
+	# События amoCRM: новые контакты и сделки
+	handle /amo-events/* {
+		reverse_proxy app:3000
+	}
+
+	# Медиа по подписанным ссылкам — их скачивает amoCRM
+	handle /media/* {
+		reverse_proxy app:3000
+	}
+
+	# Admin API — закрыт ключом в приложении
+	handle /api/* {
+		reverse_proxy app:3000
+	}
+
+	# Открытая проверка живости
+	handle /health {
+		reverse_proxy app:3000
+	}
+
+	# Админка
+	handle {
+		reverse_proxy admin:3000
+	}
+
+	log {
+		output file /data/access.log
+		format json
+	}
+}

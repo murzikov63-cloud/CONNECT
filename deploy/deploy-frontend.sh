@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Собирает админку и заливает её на наш сервер.
+# Собирает админку и заливает её на ОТДЕЛЬНЫЙ сервер.
+# С 10.11.2026 сервис на TONYAI — там это deploy/tonyai.sh front ~/messenger-admin.
+# Скрипт оставлен на случай возврата на свой сервер.
 #
 #   deploy/deploy-frontend.sh ~/messenger-admin      # из локальной папки
 #   deploy/deploy-frontend.sh https://github.com/…   # прямо из репозитория
