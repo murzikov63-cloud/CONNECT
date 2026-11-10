@@ -177,6 +177,12 @@ def make_client(session: Session) -> WebClient:
         work_dir=str(SESSION_DIR),
         qr_provider=QrCatcher(session),
     )
+    # Не светиться «в сети». Библиотека по умолчанию называет себя
+    # активным приложением при входе и в каждом пинге (раз в 30 с),
+    # и номер круглые сутки висел в сети для всех собеседников, хотя
+    # за ним никто не сидит. Сообщения от этого приходить не перестают —
+    # так же, как телефону со свёрнутым приложением.
+    client.set_presence(online=False)
 
     @client.on_start()
     async def _on_start(c: WebClient) -> None:  # type: ignore[misc]
