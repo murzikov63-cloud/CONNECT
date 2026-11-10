@@ -178,22 +178,25 @@ export async function отправитьСводку(): Promise<void> {
 export function запуститьЕжедневнуюСводку(часUTC = 6): () => void {
   let таймер: NodeJS.Timeout | null = null
 
-  const черезСколько = (): number => {
-    const сейчас = new Date()
-    const цель = new Date(сейчас)
+  // «Сейчас» для расчёта берём с запасом в минуту. Таймер может сработать
+  // на долю секунды раньше срока (на TONYAI сработал в 05:59:59.7), и тогда
+  // ближайшим сроком снова выходило сегодняшнее 06:00 — сводка уходила дважды.
+  const черезСколько = (запасМс: number): number => {
+    const сейчас = Date.now()
+    const цель = new Date(сейчас + запасМс)
     цель.setUTCHours(часUTC, 0, 0, 0)
-    if (цель <= сейчас) цель.setUTCDate(цель.getUTCDate() + 1)
-    return цель.getTime() - сейчас.getTime()
+    if (цель.getTime() <= сейчас + запасМс) цель.setUTCDate(цель.getUTCDate() + 1)
+    return цель.getTime() - сейчас
   }
 
-  const поставить = (): void => {
+  const поставить = (запасМс: number): void => {
     таймер = setTimeout(() => {
       void отправитьСводку().catch((err: unknown) => logger.error({ err }, 'сводка не собралась'))
-      поставить()
-    }, черезСколько())
+      поставить(60_000)
+    }, черезСколько(запасМс))
     таймер.unref()
   }
-  поставить()
+  поставить(0)
 
   return () => {
     if (таймер !== null) clearTimeout(таймер)
